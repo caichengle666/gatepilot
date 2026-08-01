@@ -1,13 +1,15 @@
 # ============================================
-#  AimiliVPN .gitignore
+#  GatePilot .gitignore
 # ============================================
 
-# ---- Nuitka 编译产物 ----
-vpngate_manager.build/
-vpngate_manager.dist/
-*.build/
-*.dist/
+# ---- Go 编译产物 ----
+# 历史版本构建产物
 aimilivpn
+aimilivpn.exe
+aimilivpn-linux-*
+gatepilot
+gatepilot.exe
+gatepilot-*
 
 # ---- Debian 打包产物 ----
 *.deb
@@ -56,8 +58,8 @@ AimiliVPN_Analysis_ZH.md
 
 # ---- 临时和测试文件 ----
 scratch/
+.runtime-*/
 *连接配置*
-test_*.py
 *.bak
 *.orig
 

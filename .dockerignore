@@ -1,0 +1,14 @@
+.git
+.github
+.idea
+.vscode
+vpngate_data
+data
+logs
+*.log
+*.tmp
+*.exe
+aimilivpn
+aimilivpn-*
+gatepilot
+gatepilot-*

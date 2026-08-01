@@ -1,0 +1,24 @@
+services:
+  gatepilot:
+    image: ghcr.io/caichengle666/gatepilot:latest
+    build:
+      context: .
+    container_name: gatepilot
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      VPNGATE_DATA_DIR: /var/lib/gatepilot
+      UI_HOST: 0.0.0.0
+      UI_PORT: "8787"
+      LOCAL_PROXY_HOST: 0.0.0.0
+      LOCAL_PROXY_PORT: "7928"
+      LOCAL_PROXY_BIND_TUN: "true"
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "${GATEPILOT_UI_BIND:-0.0.0.0}:${GATEPILOT_UI_PORT:-8787}:8787"
+      - "${GATEPILOT_PROXY_BIND:-127.0.0.1}:${GATEPILOT_PROXY_PORT:-7928}:7928"
+    volumes:
+      - ./data:/var/lib/gatepilot
