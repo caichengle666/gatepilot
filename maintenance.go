@@ -173,6 +173,51 @@ func (application *webApplication) checkProxyHealth() map[string]any {
 	return map[string]any{"ok": false, "ip": "-", "latency_ms": int64(0), "error": errorMessage}
 }
 
+func (application *webApplication) checkDownloadSpeed() map[string]any {
+	ui, _, _ := application.store.snapshot()
+	proxyURL := &url.URL{
+		Scheme: "http", Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(ui.ProxyPort)),
+	}
+	proxyUser := envString("LOCAL_PROXY_USER", getenv("LOCAL_PROXY_USERNAME"))
+	proxyPassword := envString("LOCAL_PROXY_PASS", getenv("LOCAL_PROXY_PASSWORD"))
+	if proxyUser != "" || proxyPassword != "" {
+		proxyURL.User = url.UserPassword(proxyUser, proxyPassword)
+	}
+	request, err := http.NewRequest(http.MethodGet, ui.SpeedTestURL, nil)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "测速请求无效: " + err.Error()}
+	}
+	request.Header.Set("User-Agent", "gatepilot-speed-test/1.0")
+	request.Header.Set("Accept-Encoding", "identity")
+	request.Header.Set("Cache-Control", "no-cache")
+	client := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	started := time.Now()
+	response, err := client.Do(request)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "宽带测速失败: " + err.Error()}
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return map[string]any{"ok": false, "error": "测速服务返回 " + response.Status}
+	}
+	bytesRead, err := io.Copy(io.Discard, io.LimitReader(response.Body, 20<<20))
+	if err != nil {
+		return map[string]any{"ok": false, "error": "读取测速数据失败: " + err.Error()}
+	}
+	if bytesRead < 256<<10 {
+		return map[string]any{"ok": false, "error": "测速文件太小，至少需要 256 KB"}
+	}
+	elapsed := time.Since(started)
+	if elapsed <= 0 {
+		return map[string]any{"ok": false, "error": "测速耗时无效"}
+	}
+	speedMbps := float64(bytesRead*8) / elapsed.Seconds() / 1_000_000
+	return map[string]any{
+		"ok": true, "speed_mbps": speedMbps, "bytes": bytesRead,
+		"duration_ms": elapsed.Milliseconds(), "url": ui.SpeedTestURL,
+	}
+}
+
 func (application *webApplication) updateProxyState(result map[string]any) {
 	ok, _ := result["ok"].(bool)
 	ip := fmt.Sprint(result["ip"])

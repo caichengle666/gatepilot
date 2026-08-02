@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -163,7 +164,7 @@ func TestCredentialUpdateKeepsServerAvailable(t *testing.T) {
 	}
 }
 
-func TestUpdateSettingsPersistsUpstreamProxy(t *testing.T) {
+func TestUpdateSettingsPersistsProxyAndSpeedSettings(t *testing.T) {
 	config := loadAppConfig()
 	config.DataDir = t.TempDir()
 	application, err := newStore(config)
@@ -171,7 +172,10 @@ func TestUpdateSettingsPersistsUpstreamProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 	web := newWebApplication(application, newVPNController(application))
-	body, _ := json.Marshal(map[string]any{"upstream_proxy": "127.0.0.1:7890"})
+	body, _ := json.Marshal(map[string]any{
+		"upstream_proxy": "127.0.0.1:7890",
+		"speed_test_url": "https://speed.example/test.bin",
+	})
 	request := httptest.NewRequest(http.MethodPost, "/api/update_settings", bytes.NewReader(body))
 	recorder := httptest.NewRecorder()
 	web.updateSettings(recorder, request)
@@ -182,6 +186,9 @@ func TestUpdateSettingsPersistsUpstreamProxy(t *testing.T) {
 	if ui.UpstreamProxy != "http://127.0.0.1:7890" {
 		t.Fatalf("upstream proxy = %q", ui.UpstreamProxy)
 	}
+	if ui.SpeedTestURL != "https://speed.example/test.bin" {
+		t.Fatalf("speed test URL = %q", ui.SpeedTestURL)
+	}
 	reloaded, err := newStore(config)
 	if err != nil {
 		t.Fatal(err)
@@ -189,6 +196,9 @@ func TestUpdateSettingsPersistsUpstreamProxy(t *testing.T) {
 	reloadedUI, _, _ := reloaded.snapshot()
 	if reloadedUI.UpstreamProxy != ui.UpstreamProxy {
 		t.Fatalf("persisted upstream proxy = %q", reloadedUI.UpstreamProxy)
+	}
+	if reloadedUI.SpeedTestURL != ui.SpeedTestURL {
+		t.Fatalf("persisted speed test URL = %q", reloadedUI.SpeedTestURL)
 	}
 
 	body, _ = json.Marshal(map[string]any{"upstream_proxy": "ftp://127.0.0.1:21"})
@@ -198,10 +208,50 @@ func TestUpdateSettingsPersistsUpstreamProxy(t *testing.T) {
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("invalid proxy returned %d: %s", recorder.Code, recorder.Body.String())
 	}
+
+	body, _ = json.Marshal(map[string]any{"speed_test_url": "file:///tmp/test.bin"})
+	request = httptest.NewRequest(http.MethodPost, "/api/update_settings", bytes.NewReader(body))
+	recorder = httptest.NewRecorder()
+	web.updateSettings(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("invalid speed URL returned %d: %s", recorder.Code, recorder.Body.String())
+	}
 }
 
-func TestIndexShowsUpstreamProxyAndNodeLatency(t *testing.T) {
-	for _, expected := range []string{"net_upstream_proxy", "节点延迟", "${latencyText}${testBtn}"} {
+func TestDownloadSpeedUsesLocalProxy(t *testing.T) {
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Host != "speed.invalid" {
+			t.Errorf("unexpected speed target: %s", request.URL.String())
+		}
+		_, _ = writer.Write(bytes.Repeat([]byte("a"), 1<<20))
+	}))
+	defer proxyServer.Close()
+
+	config := loadAppConfig()
+	config.DataDir = t.TempDir()
+	application, err := newStore(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	application.mu.Lock()
+	application.ui.ProxyPort = proxyServer.Listener.Addr().(*net.TCPAddr).Port
+	application.ui.SpeedTestURL = "http://speed.invalid/test.bin"
+	application.mu.Unlock()
+	web := newWebApplication(application, newVPNController(application))
+	result := web.checkDownloadSpeed()
+	if ok, _ := result["ok"].(bool); !ok {
+		t.Fatalf("speed test failed: %+v", result)
+	}
+	if speed, _ := result["speed_mbps"].(float64); speed <= 0 {
+		t.Fatalf("invalid speed result: %+v", result)
+	}
+	if size, _ := result["bytes"].(int64); size != 1<<20 {
+		t.Fatalf("downloaded bytes = %d", size)
+	}
+}
+
+func TestIndexShowsProxyAndSpeedFeatures(t *testing.T) {
+	for _, expected := range []string{"net_upstream_proxy", "net_speed_test_url", "btn_test_speed", "proxy_speed_val", "节点延迟", "${latencyText}${testBtn}"} {
 		if !strings.Contains(indexHTML, expected) {
 			t.Fatalf("index is missing %q", expected)
 		}

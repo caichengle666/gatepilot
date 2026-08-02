@@ -339,3 +339,21 @@ func normalizeProxyURL(raw string) (string, error) {
 	}
 	return proxyURL.String(), nil
 }
+
+func normalizeHTTPURL(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", errors.New("URL is required")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return "", err
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", errors.New("only http and https URLs are supported")
+	}
+	if parsed.Hostname() == "" {
+		return "", errors.New("URL host is required")
+	}
+	return parsed.String(), nil
+}

@@ -77,6 +77,7 @@ type uiConfig struct {
 	Port              int      `json:"port"`
 	ProxyPort         int      `json:"proxy_port"`
 	UpstreamProxy     string   `json:"upstream_proxy"`
+	SpeedTestURL      string   `json:"speed_test_url"`
 	RoutingMode       string   `json:"routing_mode"`
 	ForceCountry      string   `json:"force_country"`
 	RoutingIPType     string   `json:"routing_ip_type"`
@@ -87,34 +88,35 @@ type uiConfig struct {
 }
 
 type runtimeState struct {
-	Status               string `json:"status"`
-	Message              string `json:"message"`
-	ActiveNodeID         string `json:"active_node_id"`
-	ActiveOpenVPNNodeID  string `json:"active_openvpn_node_id"`
-	ActiveNodeLatency    string `json:"active_node_latency"`
-	IsConnecting         bool   `json:"is_connecting"`
-	MaintenanceRunning   bool   `json:"maintenance_running"`
-	APIURL               string `json:"api_url"`
-	TargetValidNodes     int    `json:"target_valid_nodes"`
-	FetchIntervalSeconds int64  `json:"fetch_interval_seconds"`
-	CheckIntervalSeconds int64  `json:"check_interval_seconds"`
-	LocalProxy           string `json:"local_proxy"`
-	LastFetchAt          int64  `json:"last_fetch_at,omitempty"`
-	LastFetchStatus      string `json:"last_fetch_status"`
-	LastFetchMessage     string `json:"last_fetch_message"`
-	LastFetchErrorCode   string `json:"last_fetch_error_code,omitempty"`
-	LastCheckAt          int64  `json:"last_check_at,omitempty"`
-	LastCheckMessage     string `json:"last_check_message"`
-	ValidNodes           int    `json:"valid_nodes"`
-	BlacklistedNodes     int    `json:"blacklisted_nodes"`
-	ProxyOK              bool   `json:"proxy_ok"`
-	ProxyIP              string `json:"proxy_ip"`
-	ProxyLatencyMS       int64  `json:"proxy_latency_ms"`
-	ProxyError           string `json:"proxy_error"`
-	CollectorHeartbeat   int64  `json:"collector_heartbeat,omitempty"`
-	CheckerHeartbeat     int64  `json:"checker_heartbeat,omitempty"`
-	PingerHeartbeat      int64  `json:"pinger_heartbeat,omitempty"`
-	UpdatedAt            string `json:"updated_at"`
+	Status               string  `json:"status"`
+	Message              string  `json:"message"`
+	ActiveNodeID         string  `json:"active_node_id"`
+	ActiveOpenVPNNodeID  string  `json:"active_openvpn_node_id"`
+	ActiveNodeLatency    string  `json:"active_node_latency"`
+	IsConnecting         bool    `json:"is_connecting"`
+	MaintenanceRunning   bool    `json:"maintenance_running"`
+	APIURL               string  `json:"api_url"`
+	TargetValidNodes     int     `json:"target_valid_nodes"`
+	FetchIntervalSeconds int64   `json:"fetch_interval_seconds"`
+	CheckIntervalSeconds int64   `json:"check_interval_seconds"`
+	LocalProxy           string  `json:"local_proxy"`
+	LastFetchAt          int64   `json:"last_fetch_at,omitempty"`
+	LastFetchStatus      string  `json:"last_fetch_status"`
+	LastFetchMessage     string  `json:"last_fetch_message"`
+	LastFetchErrorCode   string  `json:"last_fetch_error_code,omitempty"`
+	LastCheckAt          int64   `json:"last_check_at,omitempty"`
+	LastCheckMessage     string  `json:"last_check_message"`
+	ValidNodes           int     `json:"valid_nodes"`
+	BlacklistedNodes     int     `json:"blacklisted_nodes"`
+	ProxyOK              bool    `json:"proxy_ok"`
+	ProxyIP              string  `json:"proxy_ip"`
+	ProxyLatencyMS       int64   `json:"proxy_latency_ms"`
+	ProxySpeedMbps       float64 `json:"proxy_speed_mbps"`
+	ProxyError           string  `json:"proxy_error"`
+	CollectorHeartbeat   int64   `json:"collector_heartbeat,omitempty"`
+	CheckerHeartbeat     int64   `json:"checker_heartbeat,omitempty"`
+	PingerHeartbeat      int64   `json:"pinger_heartbeat,omitempty"`
+	UpdatedAt            string  `json:"updated_at"`
 }
 
 type store struct {
@@ -208,6 +210,7 @@ func newStore(config appConfig) (*store, error) {
 		Port:              config.UIPort,
 		ProxyPort:         config.ProxyPort,
 		UpstreamProxy:     strings.TrimSpace(os.Getenv("UPSTREAM_PROXY")),
+		SpeedTestURL:      envString("SPEED_TEST_URL", "https://speed.cloudflare.com/__down?bytes=10000000"),
 		RoutingMode:       "auto",
 		RoutingIPType:     "all",
 		ConnectionEnabled: true,

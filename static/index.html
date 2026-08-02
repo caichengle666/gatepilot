@@ -1148,6 +1148,12 @@
           <div style="font-size: 12px; color: var(--text-secondary); margin-top: 6px; line-height: 1.5;">用于拉取 VPNGate API 和 TCP OpenVPN 节点；UDP 节点不支持 HTTP/SOCKS5 前置代理。留空表示直连。</div>
         </div>
 
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label" for="net_speed_test_url">宽带测速网址</label>
+          <input type="url" id="net_speed_test_url" class="input-field" required placeholder="https://speed.cloudflare.com/__down?bytes=10000000">
+          <div style="font-size: 12px; color: var(--text-secondary); margin-top: 6px; line-height: 1.5;">通过当前 VPN 代理下载数据计算真实网速，单次最多读取 20 MB。</div>
+        </div>
+
         <div style="border-top: 1px dashed rgba(255,255,255,0.08); padding-top: 16px; margin-bottom: 16px;">
           <div class="form-group" style="margin-bottom: 16px;">
             <label class="form-label">IP 出站路由模式</label>
@@ -1284,8 +1290,8 @@
             <svg xmlns="http://www.w3.org/2000/svg" class="stat-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" style="color: var(--primary); width: 18px; height: 18px;"><path stroke-linecap="round" stroke-linejoin="round" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071a10.5 10.5 0 0114.14 0M1.414 8.05a16 16 0 0121.172 0" /></svg>
           </div>
           <div>
-            <h4 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-primary);">本地代理出口检测</h4>
-            <p style="margin: 2px 0 0 0; font-size: 12px; color: var(--text-secondary);">检测 HTTP/SOCKS5 代理出站连通性与 IP</p>
+            <h4 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-primary);">本地代理出口与宽带测速</h4>
+            <p style="margin: 2px 0 0 0; font-size: 12px; color: var(--text-secondary);">检测代理出站 IP，并通过实际下载计算 Mbps</p>
           </div>
         </div>
         
@@ -1296,6 +1302,7 @@
           <div style="font-size: 13px; color: var(--text-secondary); text-align: right;">
             出口 IP: <span id="proxy_ip_val" class="mono" style="font-weight: 600; color: var(--text-primary);">-</span> 
             <span id="proxy_latency_val" style="margin-left: 6px;"></span>
+            <span id="proxy_speed_val" style="margin-left: 8px; font-weight: 700; color: var(--success);">- Mbps</span>
           </div>
         </div>
 
@@ -1304,6 +1311,7 @@
             <svg xmlns="http://www.w3.org/2000/svg" style="width:14px; height:14px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
             开始检测
           </button>
+          <button id="btn_test_speed" class="btn-primary" style="height: 36px; padding: 0 16px; font-size: 13px;">测试宽带网速</button>
         </div>
       </div>
       
@@ -1361,7 +1369,7 @@
   </div>
 </main>
 <script>
-let nodes=[], state={}, testingNodeIds = new Set();
+let nodes=[], state={}, testingNodeIds = new Set(), speedTesting = false;
 let currentPage = 1;
 const pageSize = 99999;
 let currentPageNodes = [];
@@ -1628,7 +1636,9 @@ function render(){
   const pBadge = $("proxy_status_badge");
   const pIpVal = $("proxy_ip_val");
   const pLatVal = $("proxy_latency_val");
+  const pSpeedVal = $("proxy_speed_val");
   const pBtn = $("btn_test_proxy");
+  const pSpeedBtn = $("btn_test_speed");
   
   if (state.is_connecting) {
     pBadge.className = "badge";
@@ -1639,10 +1649,12 @@ function render(){
     pIpVal.textContent = state.active_node_latency || "正在连接...";
     pLatVal.innerHTML = `<span style="color: var(--text-secondary); font-size: 12px;">${esc(state.last_check_message || "正在与 VPN 节点建立加密隧道，请稍候...")}</span>`;
     pBtn.disabled = true;
+    pSpeedBtn.disabled = true;
     pBtn.style.opacity = "0.5";
     pBtn.style.cursor = "not-allowed";
   } else {
     pBtn.disabled = false;
+    pSpeedBtn.disabled = speedTesting;
     pBtn.style.opacity = "";
     pBtn.style.cursor = "";
     pBadge.style.background = "";
@@ -1672,6 +1684,8 @@ function render(){
       }
     }
   }
+  pSpeedBtn.textContent = speedTesting ? "正在下载测速..." : "测试宽带网速";
+  pSpeedVal.textContent = speedTesting ? "测试中..." : (state.proxy_speed_mbps > 0 ? `${state.proxy_speed_mbps.toFixed(2)} Mbps` : "- Mbps");
 
   updateFavPanelUI();
 
@@ -2006,6 +2020,26 @@ $("btn_test_proxy").onclick = async () => {
   }
 };
 
+$("btn_test_speed").onclick = async () => {
+  if (speedTesting) return;
+  speedTesting = true;
+  render();
+  try {
+    const response = await fetch("./api/test_speed", { method: "POST" });
+    const result = await response.json();
+    if (result.ok) {
+      state.proxy_speed_mbps = Number(result.speed_mbps);
+    } else {
+      alert(result.error || "宽带测速失败");
+    }
+  } catch (e) {
+    alert("宽带测速请求失败");
+  } finally {
+    speedTesting = false;
+    render();
+  }
+};
+
 // Admin dropdown toggle & GitHub dropdown toggle
 const adminBtn = $("admin_btn");
 const adminDropdown = $("admin_dropdown");
@@ -2318,6 +2352,7 @@ function openNetworkModal() {
   if (state) {
     $("net_proxy_port").value = state.proxy_port || 7928;
     $("net_upstream_proxy").value = state.upstream_proxy || "";
+    $("net_speed_test_url").value = state.speed_test_url || "https://speed.cloudflare.com/__down?bytes=10000000";
     const mode = state.routing_mode || "auto";
     const ipType = state.routing_ip_type || "all";
     
@@ -2345,6 +2380,7 @@ async function saveNetwork(e) {
   
   const proxyPort = parseInt($("net_proxy_port").value);
   const upstreamProxy = $("net_upstream_proxy").value.trim();
+  const speedTestURL = $("net_speed_test_url").value.trim();
   const routingMode = $("net_routing_mode").value;
   const forceCountry = $("net_force_country").value;
   const routingIpType = $("net_routing_ip_type").value;
@@ -2382,6 +2418,7 @@ async function saveNetwork(e) {
       body: JSON.stringify({
         proxy_port: proxyPort,
         upstream_proxy: upstreamProxy,
+        speed_test_url: speedTestURL,
         routing_mode: routingMode,
         force_country: forceCountry,
         routing_ip_type: routingIpType
@@ -2449,7 +2486,7 @@ load();
 
 // 每 10 秒在前台空闲时自动更新节点与状态，无需手动刷新页面
 setInterval(async () => {
-  if (typeof state !== "undefined" && !state.is_connecting && (!testingNodeIds || !testingNodeIds.size) && document.visibilityState === "visible") {
+  if (typeof state !== "undefined" && !state.is_connecting && !speedTesting && (!testingNodeIds || !testingNodeIds.size) && document.visibilityState === "visible") {
     try {
       const r = await fetch("./api/nodes");
       const d = await r.json();

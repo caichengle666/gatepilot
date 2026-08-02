@@ -23,6 +23,7 @@ OpenVPN 进程 → Linux tun0 / Windows Wintun 或 TAP
 - 从 `https://www.vpngate.net/api/iphone/` 获取 OpenVPN 节点。
 - 解析国家、IP、端口、协议、分数、速度和会话数。
 - 在节点列表显示握手测速延迟，并支持手动重新检测单个节点。
+- 通过当前 VPN 代理下载测试数据，显示实际宽带速度（Mbps）。
 - 支持自动、固定国家、固定节点和收藏优先筛选。
 - 支持在 Web 页面配置 HTTP/SOCKS5 前置代理，用于 VPNGate API 和 TCP OpenVPN 连接。
 - 启动并监控外部 OpenVPN 进程。
@@ -161,6 +162,7 @@ export LOCAL_PROXY_PASS=your-strong-password
 | `UI_HOST` | `::` | Web 监听地址 |
 | `UI_PORT` | `8787` | Web 端口 |
 | `UPSTREAM_PROXY` | 空 | 前置代理初始值；可在 Web 页面修改，用于获取节点和 TCP OpenVPN |
+| `SPEED_TEST_URL` | Cloudflare 10 MB 下载接口 | 宽带测速地址；可在 Web 页面修改，单次最多读取 20 MB |
 | `RECONNECT_INTERVAL_SECONDS` | `15` | 断线检查和自动重连周期 |
 | `TARGET_VALID_NODES` | `3` | 每轮探测节点数 |
 | `DISABLE_BACKGROUND_FETCH` | `false` | 禁用后台拉取，适合开发测试 |

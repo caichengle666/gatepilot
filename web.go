@@ -171,7 +171,8 @@ func (application *webApplication) handleGET(writer http.ResponseWriter, request
 func publicUIConfig(ui uiConfig) map[string]any {
 	return map[string]any{
 		"host": ui.Host, "port": ui.Port, "proxy_port": ui.ProxyPort, "upstream_proxy": ui.UpstreamProxy,
-		"routing_mode": ui.RoutingMode, "force_country": ui.ForceCountry,
+		"speed_test_url": ui.SpeedTestURL,
+		"routing_mode":   ui.RoutingMode, "force_country": ui.ForceCountry,
 		"routing_ip_type": ui.RoutingIPType, "connection_enabled": ui.ConnectionEnabled,
 		"fixed_node_id": ui.FixedNodeID, "favorite_node_ids": ui.FavoriteNodeIDs,
 		"fav_fail_fallback": ui.FavoriteFallback,
@@ -188,6 +189,7 @@ func statePayload(ui uiConfig, state runtimeState) map[string]any {
 	result["password_set"] = ui.Password != ""
 	result["proxy_port"] = ui.ProxyPort
 	result["upstream_proxy"] = ui.UpstreamProxy
+	result["speed_test_url"] = ui.SpeedTestURL
 	result["routing_mode"] = ui.RoutingMode
 	result["force_country"] = ui.ForceCountry
 	result["routing_ip_type"] = ui.RoutingIPType
@@ -341,6 +343,8 @@ func (application *webApplication) handlePOST(writer http.ResponseWriter, reques
 		application.updateSettings(writer, request)
 	case "/api/test_proxy":
 		application.testProxy(writer)
+	case "/api/test_speed":
+		application.testSpeed(writer)
 	default:
 		http.NotFound(writer, request)
 	}
@@ -519,6 +523,21 @@ func (application *webApplication) updateSettings(writer http.ResponseWriter, re
 		}
 		ui.UpstreamProxy = normalized
 	}
+	if raw, exists := payload["speed_test_url"]; exists {
+		value, ok := raw.(string)
+		if !ok {
+			application.store.mu.Unlock()
+			writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": "测速网址格式无效"})
+			return
+		}
+		normalized, err := normalizeHTTPURL(value)
+		if err != nil {
+			application.store.mu.Unlock()
+			writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": "测速网址格式无效: " + err.Error()})
+			return
+		}
+		ui.SpeedTestURL = normalized
+	}
 	if ui.Port == ui.ProxyPort {
 		application.store.mu.Unlock()
 		writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": "代理端口不能与网页端口相同"})
@@ -636,6 +655,14 @@ func numberFromJSON(value any) (int, bool) {
 func (application *webApplication) testProxy(writer http.ResponseWriter) {
 	result := application.checkProxyHealth()
 	application.updateProxyState(result)
+	writeJSONResponse(writer, http.StatusOK, result)
+}
+
+func (application *webApplication) testSpeed(writer http.ResponseWriter) {
+	result := application.checkDownloadSpeed()
+	if speed, ok := result["speed_mbps"].(float64); ok {
+		_ = application.store.updateState(func(state *runtimeState) { state.ProxySpeedMbps = speed })
+	}
 	writeJSONResponse(writer, http.StatusOK, result)
 }
 
