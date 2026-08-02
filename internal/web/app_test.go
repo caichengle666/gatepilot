@@ -184,6 +184,7 @@ func TestUpdateSettingsPersistsNetworkDownloads(t *testing.T) {
 		"speed_test_url": "https://example.com/download?bytes=1000000",
 	})
 	request := httptest.NewRequest(http.MethodPost, "/api/update_settings", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	webApp.updateSettings(recorder, request)
 	if recorder.Code != http.StatusOK {
@@ -210,6 +211,7 @@ func TestUpdateSettingsPersistsNetworkDownloads(t *testing.T) {
 
 	body, _ = json.Marshal(map[string]any{"upstream_proxy": "ftp://127.0.0.1:21"})
 	request = httptest.NewRequest(http.MethodPost, "/api/update_settings", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
 	recorder = httptest.NewRecorder()
 	webApp.updateSettings(recorder, request)
 	if recorder.Code != http.StatusBadRequest {
@@ -218,6 +220,7 @@ func TestUpdateSettingsPersistsNetworkDownloads(t *testing.T) {
 
 	body, _ = json.Marshal(map[string]any{"speed_test_url": "ftp://example.com/file"})
 	request = httptest.NewRequest(http.MethodPost, "/api/update_settings", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
 	recorder = httptest.NewRecorder()
 	webApp.updateSettings(recorder, request)
 	if recorder.Code != http.StatusBadRequest {
@@ -310,6 +313,46 @@ func TestSpeedTestAPIUsesConfiguredLocalProxy(t *testing.T) {
 	}
 }
 
+func TestLoginRateLimit(t *testing.T) {
+	config := store.LoadAppConfig()
+	config.DataDir = t.TempDir()
+	config.DisableBackground = true
+	application, err := store.New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := application.UpdateUI(func(ui *store.UIConfig) error {
+		ui.SecretPath = "testsecret"
+		ui.Username = "admin"
+		ui.Password = "secret"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(NewApplication(application, vpn.NewController(application)))
+	defer server.Close()
+
+	loginBody, _ := json.Marshal(map[string]string{"username": "admin", "password": "wrong"})
+	for attempt := 1; attempt <= 5; attempt++ {
+		response, err := http.Post(server.URL+"/testsecret/api/login", "application/json", bytes.NewReader(loginBody))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusForbidden {
+			t.Fatalf("attempt %d returned %s", attempt, response.Status)
+		}
+	}
+	response, err := http.Post(server.URL+"/testsecret/api/login", "application/json", bytes.NewReader(loginBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("blocked login returned %s", response.Status)
+	}
+}
+
 func TestUpdateSettingsFixedIPDoesNotDeadlock(t *testing.T) {
 	config := store.LoadAppConfig()
 	config.DataDir = t.TempDir()
@@ -320,6 +363,7 @@ func TestUpdateSettingsFixedIPDoesNotDeadlock(t *testing.T) {
 	webApp := NewApplication(application, vpn.NewController(application))
 	body, _ := json.Marshal(map[string]any{"routing_mode": "fixed_ip"})
 	request := httptest.NewRequest(http.MethodPost, "/api/update_settings", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {

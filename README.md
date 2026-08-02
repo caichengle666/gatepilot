@@ -184,7 +184,7 @@ export LOCAL_PROXY_PASS=your-strong-password
 | `LOCAL_PROXY_BIND_TUN` | `true` | 强制把代理出站绑定到 Linux `tun0` 或 Windows OpenVPN 网卡 |
 | `LOCAL_PROXY_USER` | 空 | 代理认证用户名；优先于 Web 配置 |
 | `LOCAL_PROXY_PASS` | 空 | 代理认证密码；优先于 Web 配置 |
-| `UI_HOST` | `::` | Web 监听地址 |
+| `UI_HOST` | `127.0.0.1` | Web 监听地址；开放到局域网时应使用反向代理提供 HTTPS |
 | `UI_PORT` | `8787` | Web 端口 |
 | `UPSTREAM_PROXY` | 空 | 前置代理初始值；可在 Web 页面修改，用于拉取节点列表和帮助 TCP 节点建立隧道 |
 | `SPEED_TEST_URL` | Cloudflare 10 MB 下载接口 | 宽带测速地址；可在 Web 页面修改，单次最多读取 20 MB |

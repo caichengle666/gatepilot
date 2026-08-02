@@ -2,8 +2,16 @@
 
 package vpn
 
-func openVPNDeviceArguments(device string, _ float64) []string {
+func openVPNDeviceArguments(device string, _ float64, _ string) []string {
 	return []string{"--dev", device, "--dev-type", "tun"}
+}
+
+func openVPNDriverCandidates(_ float64) []string {
+	return []string{""}
+}
+
+func shouldRetryOpenVPNDriver(_ error) bool {
+	return false
 }
 
 func openVPNRouteArguments(routeNopull bool) []string {

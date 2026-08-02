@@ -3,7 +3,6 @@ package web
 import (
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestOperationLockUnlockIfOwned(t *testing.T) {
@@ -18,7 +17,7 @@ func TestOperationLockUnlockIfOwned(t *testing.T) {
 	lock.Unlock()
 }
 
-func TestOperationLockUnlockIfOwnedIgnoresOtherOwner(t *testing.T) {
+func TestOperationLockCanBeReleasedByWorker(t *testing.T) {
 	var lock operationLock
 	if !lock.TryLock() {
 		t.Fatal("expected fresh lock to be acquirable")
@@ -28,38 +27,11 @@ func TestOperationLockUnlockIfOwnedIgnoresOtherOwner(t *testing.T) {
 		lock.unlockIfOwned()
 		close(released)
 	}()
-	select {
-	case <-released:
-	case <-time.After(time.Second):
-		t.Fatal("unlockIfOwned should not block")
-	}
-	if lock.TryLock() {
-		t.Fatal("other goroutine must not release a lock it does not own")
-	}
-	lock.Unlock() //nolint:sync // test recovers from intentionally leaked lock
-}
-
-func TestOperationLockForceUnlockIfStale(t *testing.T) {
-	var lock operationLock
+	<-released
 	if !lock.TryLock() {
-		t.Fatal("expected fresh lock to be acquirable")
+		t.Fatal("expected worker to release the operation lock")
 	}
-	previous := operationLockTimeout
-	defer func() { operationLockTimeout = previous }()
-	operationLockTimeout = 50 * time.Millisecond
-	lock.owner.Store(time.Now().Add(-time.Hour).UnixNano())
-	recoveryOwner := int64(goroutineID()) + 1
-	if !lock.forceUnlockIfStaleWithOwner(recoveryOwner) {
-		t.Fatal("expected stale lock to be force unlocked")
-	}
-	if lock.owner.Load() != recoveryOwner {
-		t.Fatalf("expected recovery owner to be recorded, got %d", lock.owner.Load())
-	}
-	if !lock.mutex.TryLock() {
-		t.Fatal("expected lock to be acquirable after stale recovery")
-	}
-	lock.owner.Store(0)
-	lock.mutex.Unlock()
+	lock.Unlock()
 }
 
 func TestOperationLockConcurrentOwnership(t *testing.T) {

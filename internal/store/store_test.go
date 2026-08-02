@@ -30,7 +30,7 @@ func TestLoadAppConfigDefaults(t *testing.T) {
 	if config.ProxyHost != "127.0.0.1" || config.ProxyPort != 7928 || config.ProxyMaxConnections != 256 {
 		t.Fatalf("unexpected proxy defaults: %+v", config)
 	}
-	if config.UIHost != "::" || config.UIPort != 8787 {
+	if config.UIHost != "127.0.0.1" || config.UIPort != 8787 {
 		t.Fatalf("unexpected UI defaults: %+v", config)
 	}
 	if config.FetchInterval != 1260*time.Second || config.ReconnectInterval != 15*time.Second || config.OpenVPNTimeout != 35*time.Second {
@@ -136,7 +136,7 @@ func TestFetchAttemptUsesUpstreamProxy(t *testing.T) {
 		Config: AppConfig{MaxScanRows: 10},
 		UI:     UIConfig{UpstreamProxy: proxyServer.URL},
 	}
-	nodes, err := application.fetchAttempt(context.Background(), "http://vpngate.invalid/api/iphone/", false)
+	nodes, err := application.fetchAttempt(context.Background(), "http://vpngate.invalid/api/iphone/")
 	if err != nil {
 		t.Fatalf("fetchAttempt returned error: %v", err)
 	}
@@ -145,6 +145,28 @@ func TestFetchAttemptUsesUpstreamProxy(t *testing.T) {
 	}
 	if len(nodes) != 1 || nodes[0].HostName != "vpn.example" {
 		t.Fatalf("unexpected nodes: %+v", nodes)
+	}
+}
+
+func TestFetchCandidatesReportsAllNodesBlacklisted(t *testing.T) {
+	profile := "client\nproto tcp\nremote 203.0.113.8 443\n"
+	csvText := "#HostName,IP,Score,Ping,Speed,CountryLong,CountryShort,NumVpnSessions,TotalUsers,TotalTraffic,LogType,Message,OpenVPN_ConfigData_Base64\n" +
+		"vpn.example,203.0.113.8,100,42,9000000,Japan,JP,5,10,1000,2weeks,ok," + base64.StdEncoding.EncodeToString([]byte(profile)) + "\n*\n"
+	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = writer.Write([]byte(csvText))
+	}))
+	defer apiServer.Close()
+
+	dataDir := t.TempDir()
+	if err := writeJSON(filepath.Join(dataDir, "blacklist.json"), map[string]BlacklistEntry{
+		"JP_vpn.example": {ID: "JP_vpn.example", Until: time.Now().Add(time.Hour).Unix()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	application := &Store{Config: AppConfig{APIURL: apiServer.URL, DataDir: dataDir, MaxScanRows: 10}}
+	_, _, err := application.fetchCandidates(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "未被拉黑") {
+		t.Fatalf("unexpected fetchCandidates error: %v", err)
 	}
 }
 

@@ -139,11 +139,7 @@ func isLocalProxyEnvironmentFailure(message string) bool {
 		"adapter is not ready",
 		"openvpn windows adapter",
 		"虚拟网卡未就绪",
-		"no such host",
-		"connection refused",
-		"bad gateway",
-		"proxy error",
-		"502",
+		"本地代理端口未监听",
 	}
 	for _, marker := range markers {
 		if strings.Contains(lower, marker) {
@@ -184,12 +180,18 @@ func (a *Application) CheckProxyHealth() map[string]any {
 		response, err := client.Get(endpoint)
 		if err != nil {
 			lastError = err
+			if a.Proxy != nil && a.Proxy.LastDialError() != "" {
+				lastError = errors.New(a.Proxy.LastDialError())
+			}
 			continue
 		}
 		body, readErr := io.ReadAll(io.LimitReader(response.Body, 4096))
 		_ = response.Body.Close()
 		if readErr != nil || response.StatusCode != http.StatusOK {
 			lastError = fmt.Errorf("%s", response.Status)
+			if a.Proxy != nil && a.Proxy.LastDialError() != "" {
+				lastError = errors.New(a.Proxy.LastDialError())
+			}
 			continue
 		}
 		ip := strings.TrimSpace(string(body))

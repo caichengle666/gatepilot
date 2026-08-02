@@ -74,7 +74,7 @@ func sanitizeOpenVPNConfig(raw string) string {
 	return strings.Join(lines, "\n")
 }
 
-func (c *Controller) commandFor(candidate store.Node, configPath, device string, routeNopull bool) (*exec.Cmd, error) {
+func (c *Controller) commandFor(candidate store.Node, configPath, device, windowsDriver string, routeNopull bool) (*exec.Cmd, error) {
 	parts, err := splitCommandLine(c.application.Config.OpenVPNCommand)
 	if err != nil {
 		return nil, err
@@ -95,7 +95,7 @@ func (c *Controller) commandFor(candidate store.Node, configPath, device string,
 		"--connect-timeout", "15", "--auth-user-pass", authPath,
 		"--auth-nocache", "--verb", "3",
 	)
-	arguments = append(arguments, openVPNDeviceArguments(device, c.openVPNVersion())...)
+	arguments = append(arguments, openVPNDeviceArguments(device, c.openVPNVersion(), windowsDriver)...)
 	arguments = append(arguments, openVPNRouteArguments(routeNopull)...)
 	if c.openVPNVersion() >= 2.5 {
 		arguments = append(arguments,
@@ -265,6 +265,23 @@ func (c *Controller) prepareConfig(candidate store.Node, suffix string) (string,
 }
 
 func (c *Controller) runUntilReady(candidate store.Node, device string, timeout time.Duration, routeNopull bool) (*openVPNRun, error) {
+	drivers := openVPNDriverCandidates(c.openVPNVersion())
+	var lastError error
+	for index, driver := range drivers {
+		run, err := c.runUntilReadyWithDriver(candidate, device, driver, timeout, routeNopull)
+		if err == nil {
+			return run, nil
+		}
+		lastError = err
+		if index == len(drivers)-1 || !shouldRetryOpenVPNDriver(err) {
+			break
+		}
+		c.application.LogEvent("warning", "OpenVPN", fmt.Sprintf("Windows 驱动 %s 不可用，尝试下一种驱动", driver))
+	}
+	return nil, lastError
+}
+
+func (c *Controller) runUntilReadyWithDriver(candidate store.Node, device, windowsDriver string, timeout time.Duration, routeNopull bool) (*openVPNRun, error) {
 	ready := false
 	defer func() {
 		if !ready {
@@ -278,7 +295,7 @@ func (c *Controller) runUntilReady(candidate store.Node, device string, timeout 
 	if strings.HasPrefix(device, "tun_test") {
 		defer os.Remove(configPath)
 	}
-	command, err := c.commandFor(candidate, configPath, device, routeNopull)
+	command, err := c.commandFor(candidate, configPath, device, windowsDriver, routeNopull)
 	if err != nil {
 		return nil, err
 	}

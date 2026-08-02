@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,11 +12,9 @@ import (
 	"net"
 	"net/http"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/caichengle666/gatepilot/internal/proxy"
@@ -33,77 +32,43 @@ type Application struct {
 	serverMu   sync.Mutex
 	sessionsMu sync.Mutex
 	sessions   map[string]time.Time
+	loginMu    sync.Mutex
+	logins     map[string]loginFailure
 	Operations operationLock
 	speedTests sync.Mutex
 }
 
-var operationLockTimeout = 2 * time.Minute
+type loginFailure struct {
+	count        int
+	blockedUntil time.Time
+}
 
 type operationLock struct {
 	mutex sync.Mutex
-	owner atomic.Int64
 }
 
 func (lock *operationLock) TryLock() bool {
-	if !lock.mutex.TryLock() {
-		return false
-	}
-	lock.owner.Store(int64(goroutineID()))
-	return true
+	return lock.mutex.TryLock()
 }
 
 func (lock *operationLock) Lock() {
 	lock.mutex.Lock()
-	lock.owner.Store(int64(goroutineID()))
 }
 
 func (lock *operationLock) Unlock() {
-	lock.owner.Store(0)
 	lock.mutex.Unlock()
 }
 
 func (lock *operationLock) unlockIfOwned() {
-	if lock.owner.CompareAndSwap(int64(goroutineID()), 0) {
-		lock.mutex.Unlock()
-	}
-}
-
-func (lock *operationLock) forceUnlockIfStale() bool {
-	return lock.forceUnlockIfStaleWithOwner(int64(goroutineID()))
-}
-
-func (lock *operationLock) forceUnlockIfStaleWithOwner(ownerID int64) bool {
-	for {
-		owner := lock.owner.Load()
-		if owner == 0 || time.Since(time.Unix(0, owner)) < operationLockTimeout {
-			return false
-		}
-		if lock.owner.CompareAndSwap(owner, ownerID) {
-			if owner != ownerID {
-				lock.mutex.Unlock()
-			}
-			return true
-		}
-	}
-}
-
-func goroutineID() int64 {
-	buffer := make([]byte, 64)
-	buffer = buffer[:runtime.Stack(buffer, false)]
-	fields := strings.Fields(strings.TrimPrefix(string(buffer), "goroutine "))
-	if len(fields) == 0 {
-		return 0
-	}
-	id, err := strconv.ParseInt(fields[0], 10, 64)
-	if err != nil {
-		return 0
-	}
-	return id
+	lock.mutex.Unlock()
 }
 
 // NewApplication 创建 Web 管理服务。
 func NewApplication(application *store.Store, vpnCtrl *vpn.Controller) *Application {
-	return &Application{Store: application, VPN: vpnCtrl, startedAt: time.Now(), sessions: map[string]time.Time{}}
+	return &Application{
+		Store: application, VPN: vpnCtrl, startedAt: time.Now(),
+		sessions: map[string]time.Time{}, logins: map[string]loginFailure{},
+	}
 }
 
 // Serve 启动 HTTP 监听，端口变更后自动重启。
@@ -111,7 +76,14 @@ func (a *Application) Serve() error {
 	for {
 		ui, _, _ := a.Store.Snapshot()
 		address := net.JoinHostPort(ui.Host, strconv.Itoa(ui.Port))
-		server := &http.Server{Addr: address, Handler: a, ReadHeaderTimeout: 10 * time.Second}
+		server := &http.Server{
+			Addr: address, Handler: a,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      3 * time.Minute,
+			IdleTimeout:       time.Minute,
+			MaxHeaderBytes:    1 << 20,
+		}
 		a.serverMu.Lock()
 		a.server = server
 		a.serverMu.Unlock()
@@ -191,24 +163,52 @@ func (a *Application) authorized(request *http.Request) bool {
 }
 
 func (a *Application) login(writer http.ResponseWriter, request *http.Request) {
+	clientIP := request.RemoteAddr
+	if host, _, err := net.SplitHostPort(request.RemoteAddr); err == nil {
+		clientIP = host
+	}
+	a.loginMu.Lock()
+	failure := a.logins[clientIP]
+	if time.Now().Before(failure.blockedUntil) {
+		a.loginMu.Unlock()
+		writeJSONResponse(writer, http.StatusTooManyRequests, map[string]any{"ok": false, "error": "登录失败次数过多，请稍后再试"})
+		return
+	}
+	a.loginMu.Unlock()
 	var payload struct{ Username, Password string }
 	if err := decodeJSON(request, &payload); err != nil {
 		writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
 	ui, _, _ := a.Store.Snapshot()
-	if payload.Username != ui.Username || payload.Password != ui.Password {
+	usernameMatch := subtle.ConstantTimeCompare([]byte(payload.Username), []byte(ui.Username))
+	passwordMatch := subtle.ConstantTimeCompare([]byte(payload.Password), []byte(ui.Password))
+	if usernameMatch&passwordMatch != 1 {
+		a.loginMu.Lock()
+		failure = a.logins[clientIP]
+		failure.count++
+		if failure.count >= 5 {
+			failure.blockedUntil = time.Now().Add(time.Minute)
+		}
+		a.logins[clientIP] = failure
+		a.loginMu.Unlock()
 		writeJSONResponse(writer, http.StatusForbidden, map[string]any{"ok": false, "error": "用户名或密码不正确，请重新输入"})
 		return
 	}
+	a.loginMu.Lock()
+	delete(a.logins, clientIP)
+	a.loginMu.Unlock()
 	tokenBytes := make([]byte, 32)
-	_, _ = rand.Read(tokenBytes)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		writeJSONResponse(writer, http.StatusInternalServerError, map[string]any{"ok": false, "error": "无法创建安全会话"})
+		return
+	}
 	token := hex.EncodeToString(tokenBytes)
 	a.sessionsMu.Lock()
 	a.sessions[token] = time.Now().Add(30 * 24 * time.Hour)
 	a.sessionsMu.Unlock()
 	cookiePath := "/" + strings.Trim(ui.SecretPath, "/") + "/"
-	http.SetCookie(writer, &http.Cookie{Name: "session", Value: token, Path: cookiePath, HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 30 * 86400})
+	http.SetCookie(writer, &http.Cookie{Name: "session", Value: token, Path: cookiePath, HttpOnly: true, Secure: request.TLS != nil, SameSite: http.SameSiteLaxMode, MaxAge: 30 * 86400})
 	writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -336,12 +336,14 @@ func (a *Application) gatewayStatus() map[string]any {
 func (a *Application) handlePOST(writer http.ResponseWriter, request *http.Request, path string) {
 	switch path {
 	case "/api/logout":
+		ui, _, _ := a.Store.Snapshot()
 		if cookie, err := request.Cookie("session"); err == nil {
 			a.sessionsMu.Lock()
 			delete(a.sessions, cookie.Value)
 			a.sessionsMu.Unlock()
 		}
-		http.SetCookie(writer, &http.Cookie{Name: "session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true})
+		cookiePath := "/" + strings.Trim(ui.SecretPath, "/") + "/"
+		http.SetCookie(writer, &http.Cookie{Name: "session", Value: "", Path: cookiePath, MaxAge: -1, HttpOnly: true, Secure: request.TLS != nil, SameSite: http.SameSiteLaxMode})
 		writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true})
 	case "/api/connect":
 		var payload struct {
@@ -352,12 +354,8 @@ func (a *Application) handlePOST(writer http.ResponseWriter, request *http.Reque
 			return
 		}
 		if !a.Operations.TryLock() {
-			if a.Operations.forceUnlockIfStale() {
-				a.Store.LogEvent("warning", "Web", "检测到节点维护锁超过 2 分钟未释放，已强制恢复")
-			} else {
-				writeJSONResponse(writer, http.StatusConflict, map[string]any{"ok": false, "error": "当前已有连接或节点维护任务正在运行"})
-				return
-			}
+			writeJSONResponse(writer, http.StatusConflict, map[string]any{"ok": false, "error": "当前已有连接或节点维护任务正在运行"})
+			return
 		}
 		message, err := a.VPN.Connect(payload.ID)
 		a.Operations.unlockIfOwned()
@@ -773,10 +771,16 @@ func errorText(err error) string {
 }
 
 func decodeJSON(request *http.Request, target any) error {
+	if !strings.HasPrefix(strings.ToLower(request.Header.Get("Content-Type")), "application/json") {
+		return errors.New("请求必须使用 application/json")
+	}
 	decoder := json.NewDecoder(io.LimitReader(request.Body, 256<<10))
 	decoder.UseNumber()
 	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("请求 JSON 无效: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("请求 JSON 只能包含一个对象")
 	}
 	return nil
 }

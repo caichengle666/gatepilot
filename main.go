@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/caichengle666/gatepilot/internal/proxy"
@@ -20,6 +21,8 @@ func main() {
 	}
 	defer releaseInstance()
 	config := store.LoadAppConfig()
+	_, credentialsError := os.Stat(filepath.Join(config.DataDir, "ui_auth.json"))
+	firstStart := os.IsNotExist(credentialsError)
 	application, err := store.New(config)
 	if err != nil {
 		log.Fatalf("初始化数据目录失败: %v", err)
@@ -49,7 +52,9 @@ func main() {
 		log.Printf("OpenVPN 核心不可用: %s", message)
 	}
 	log.Printf("管理地址: http://127.0.0.1:%d/%s/", ui.Port, ui.SecretPath)
-	log.Printf("初始账号: %s  密码: %s", ui.Username, ui.Password)
+	if firstStart {
+		log.Printf("初始账号: %s  密码: %s", ui.Username, ui.Password)
+	}
 	go func() {
 		if err := proxyServer.Serve(); err != nil {
 			log.Printf("本地代理服务停止: %v", err)

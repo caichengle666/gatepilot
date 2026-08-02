@@ -70,15 +70,8 @@ func detectWindowsVPNAdapter() bool {
 		signature := iface.Name + "|" + ipv4.String()
 		score := 0
 		changed := windowsVPNRoute.before[iface.Index] != signature
-		name := strings.ToLower(iface.Name)
-		looksLikeVPN := false
-		for _, marker := range []string{"openvpn", "wintun", "tap", "tun"} {
-			if strings.Contains(name, marker) {
-				looksLikeVPN = true
-				break
-			}
-		}
-		if routeInterfaceIndex == iface.Index && (changed || isVPNGateIPv4(routeIP)) {
+		looksLikeVPN := looksLikeWindowsVPNInterface(iface.Name)
+		if routeInterfaceIndex == iface.Index && (changed || looksLikeVPN && isVPNGateIPv4(routeIP)) {
 			score += 1000
 			if routeIP != nil {
 				ipv4 = append(net.IP(nil), routeIP...)
@@ -169,7 +162,7 @@ func cleanupPolicyRouting() {
 	if before != nil {
 		interfaces, _ := net.Interfaces()
 		for _, iface := range interfaces {
-			if ipv4 := firstInterfaceIPv4(iface); ipv4 != nil && (isVPNGateIPv4(ipv4) || before[iface.Index] != iface.Name+"|"+ipv4.String()) {
+			if ipv4 := firstInterfaceIPv4(iface); ipv4 != nil && (looksLikeWindowsVPNInterface(iface.Name) && isVPNGateIPv4(ipv4) || before[iface.Index] != iface.Name+"|"+ipv4.String()) {
 				drain[iface.Index] = iface.Name
 			}
 		}
@@ -192,7 +185,7 @@ func cleanupStaleVPNState(openVPNCommand string) {
 	if err != nil || !isBundledOpenVPNExecutable(applicationExecutable, openVPNExecutable) {
 		return
 	}
-	command := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `Get-CimInstance Win32_Process -Filter "Name='openvpn.exe'" | Where-Object { -not (Get-Process -Id $_.ParentProcessId -ErrorAction SilentlyContinue) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`)
+	command := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `$target = [IO.Path]::GetFullPath($args[0]); Get-CimInstance Win32_Process -Filter "Name='openvpn.exe'" | Where-Object { $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $target -and -not (Get-Process -Id $_.ParentProcessId -ErrorAction SilentlyContinue) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`, openVPNExecutable)
 	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	if output, runErr := command.CombinedOutput(); runErr != nil {
 		log.Printf("Unable to drain orphaned bundled OpenVPN processes: %v (%s)", runErr, strings.TrimSpace(string(output)))
@@ -200,7 +193,7 @@ func cleanupStaleVPNState(openVPNCommand string) {
 	time.Sleep(250 * time.Millisecond)
 	interfaces, _ := net.Interfaces()
 	for _, iface := range interfaces {
-		if ipv4 := firstInterfaceIPv4(iface); isVPNGateIPv4(ipv4) {
+		if ipv4 := firstInterfaceIPv4(iface); looksLikeWindowsVPNInterface(iface.Name) && isVPNGateIPv4(ipv4) {
 			drainWindowsVPNRoutes(iface.Index, iface.Name)
 		}
 	}
@@ -225,7 +218,17 @@ func isBundledOpenVPNExecutable(applicationExecutable, openVPNExecutable string)
 
 func isVPNGateIPv4(ip net.IP) bool {
 	ipv4 := ip.To4()
-	return ipv4 != nil && ipv4[0] == 10 && ipv4[1] == 211 && ipv4[2] == 1
+	return ipv4 != nil && ipv4[0] == 10
+}
+
+func looksLikeWindowsVPNInterface(name string) bool {
+	lower := strings.ToLower(name)
+	for _, marker := range []string{"openvpn", "wintun", "tap", "tun"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func windowsRouteDeleteArguments(interfaceIndex int) [][]string {

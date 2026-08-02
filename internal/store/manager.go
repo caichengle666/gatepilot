@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/csv"
 	"errors"
@@ -105,26 +104,9 @@ func (s *Store) RefreshNodes(ctx context.Context) (string, error) {
 }
 
 func (s *Store) fetchCandidates(ctx context.Context) ([]Node, string, error) {
-	type attempt struct {
-		url      string
-		insecure bool
-	}
-	attempts := []attempt{{url: s.Config.APIURL}}
-	if strings.HasPrefix(s.Config.APIURL, "https://") {
-		attempts = append(attempts,
-			attempt{url: s.Config.APIURL, insecure: true},
-			attempt{url: "http://" + strings.TrimPrefix(s.Config.APIURL, "https://")},
-		)
-	}
 	blacklist := s.LoadBlacklist()
-	var lastError error
-	for _, current := range attempts {
-		nodes, err := s.fetchAttempt(ctx, current.url, current.insecure)
-		if err != nil {
-			lastError = err
-			s.LogEvent("warning", "Main", fmt.Sprintf("拉取失败 %s: %v", current.url, err))
-			continue
-		}
+	nodes, lastError := s.fetchAttempt(ctx, s.Config.APIURL)
+	if lastError == nil {
 		filtered := nodes[:0]
 		for _, candidate := range nodes {
 			if _, blocked := blacklist[candidate.ID]; !blocked {
@@ -133,13 +115,14 @@ func (s *Store) fetchCandidates(ctx context.Context) ([]Node, string, error) {
 		}
 		if len(filtered) > 0 {
 			mode := "HTTPS 校验"
-			if current.insecure {
-				mode = "HTTPS 兼容模式"
-			} else if strings.HasPrefix(current.url, "http://") {
-				mode = "HTTP 回退"
+			if strings.HasPrefix(s.Config.APIURL, "http://") {
+				mode = "用户配置的 HTTP 地址"
 			}
 			return filtered, mode, nil
 		}
+		lastError = errors.New("VPNGate API 没有返回未被拉黑的可用 OpenVPN 节点")
+	} else {
+		s.LogEvent("warning", "Main", fmt.Sprintf("拉取失败 %s: %v", s.Config.APIURL, lastError))
 	}
 	s.mu.RLock()
 	cached := append([]Node(nil), s.Nodes...)
@@ -150,13 +133,13 @@ func (s *Store) fetchCandidates(ctx context.Context) ([]Node, string, error) {
 	return nil, "", fmt.Errorf("获取 VPNGate 节点失败: %w", lastError)
 }
 
-func (s *Store) fetchAttempt(ctx context.Context, endpoint string, insecure bool) ([]Node, error) {
+func (s *Store) fetchAttempt(ctx context.Context, endpoint string) ([]Node, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
 	request.Header.Set("User-Agent", "gatepilot-go/1.0")
-	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure}}
+	transport := &http.Transport{}
 	if proxyURL, proxyErr := ParseProxyURL(s.UpstreamProxy()); proxyErr == nil && proxyURL != nil {
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}

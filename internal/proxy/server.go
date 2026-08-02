@@ -31,6 +31,8 @@ type Server struct {
 	traffic    trafficCounter
 	mu         sync.Mutex
 	listener   net.Listener
+	restart    *time.Timer
+	dialError  string
 }
 
 // NewServer 创建代理服务器。
@@ -57,6 +59,23 @@ func (s *Server) credentials() (string, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.username, s.password
+}
+
+// LastDialError 返回最近一次代理出站失败原因。
+func (s *Server) LastDialError() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dialError
+}
+
+func (s *Server) setDialError(err error) {
+	s.mu.Lock()
+	if err == nil {
+		s.dialError = ""
+	} else {
+		s.dialError = err.Error()
+	}
+	s.mu.Unlock()
 }
 
 // Serve 启动代理监听。
@@ -94,12 +113,16 @@ func (s *Server) Serve() error {
 
 // ScheduleRestart 延迟重启代理监听。
 func (s *Server) ScheduleRestart(port int) {
-	go func() {
-		time.Sleep(2 * time.Second)
+	s.mu.Lock()
+	s.port = port
+	if s.restart != nil {
+		s.restart.Stop()
+	}
+	s.restart = time.AfterFunc(2*time.Second, func() {
 		s.mu.Lock()
 		listener := s.listener
 		s.listener = nil
-		s.port = port
+		s.restart = nil
 		s.mu.Unlock()
 		if listener != nil {
 			_ = listener.Close()
@@ -107,12 +130,13 @@ func (s *Server) ScheduleRestart(port int) {
 		if err := s.Serve(); err != nil {
 			log.Printf("Local proxy restart failed: %v", err)
 		}
-	}()
+	})
+	s.mu.Unlock()
 }
 
 func (s *Server) handle(client net.Conn) {
 	defer client.Close()
-	_ = client.SetDeadline(time.Now().Add(2 * time.Minute))
+	_ = client.SetDeadline(time.Now().Add(30 * time.Second))
 	first := []byte{0}
 	if _, err := io.ReadFull(client, first); err != nil {
 		return
@@ -178,9 +202,11 @@ func (s *Server) handleSOCKS5(client net.Conn) {
 	}
 	upstream, err := DialVPN(net.JoinHostPort(host, strconv.Itoa(int(binary.BigEndian.Uint16(portBytes)))), s.requireTun)
 	if err != nil {
+		s.setDialError(err)
 		_, _ = client.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
 		return
 	}
+	s.setDialError(nil)
 	defer upstream.Close()
 	_, _ = client.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
 	s.relayTraffic(client, upstream)
@@ -263,9 +289,11 @@ func (s *Server) handleHTTP(client net.Conn, first byte) {
 	}
 	upstream, err := DialVPN(target, s.requireTun)
 	if err != nil {
+		s.setDialError(err)
 		writeProxyResponse(client, http.StatusBadGateway, "Bad Gateway")
 		return
 	}
+	s.setDialError(nil)
 	defer upstream.Close()
 	request.RequestURI = ""
 	if request.URL.Scheme == "" {
@@ -300,9 +328,11 @@ func (s *Server) handleConnect(client net.Conn, authority string) {
 	}
 	upstream, err := DialVPN(target, s.requireTun)
 	if err != nil {
+		s.setDialError(err)
 		writeProxyResponse(client, http.StatusBadGateway, "Bad Gateway")
 		return
 	}
+	s.setDialError(nil)
 	defer upstream.Close()
 	_, _ = io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n")
 	s.relayTraffic(client, upstream)
@@ -319,6 +349,8 @@ func (s *Server) Traffic() TrafficStats {
 }
 
 func (s *Server) relayTraffic(left, right net.Conn) {
+	_ = left.SetDeadline(time.Time{})
+	_ = right.SetDeadline(time.Time{})
 	done := make(chan struct{}, 2)
 	copyConnection := func(destination, source net.Conn, counter func(int64)) {
 		_, _ = io.Copy(destination, &countingReader{reader: source, counter: counter})

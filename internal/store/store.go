@@ -43,7 +43,7 @@ func LoadAppConfig() AppConfig {
 		ProxyHost:           EnvString("LOCAL_PROXY_HOST", "127.0.0.1"),
 		ProxyPort:           EnvInt("LOCAL_PROXY_PORT", 7928, 1, 65535),
 		ProxyMaxConnections: EnvInt("LOCAL_PROXY_MAX_CONNECTIONS", 256, 1, 65535),
-		UIHost:              EnvString("UI_HOST", "::"),
+		UIHost:              EnvString("UI_HOST", "127.0.0.1"),
 		UIPort:              EnvInt("UI_PORT", 8787, 1, 65535),
 		FetchInterval:       time.Duration(EnvInt("FETCH_INTERVAL_SECONDS", 1260, 1, 86400)) * time.Second,
 		ReconnectInterval:   time.Duration(EnvInt("RECONNECT_INTERVAL_SECONDS", 15, 1, 3600)) * time.Second,

@@ -160,7 +160,7 @@ func DiagnoseAPIFailure(endpoint string, cause error) (string, string) {
 	}
 	_ = connection.Close()
 	if cause != nil && strings.Contains(strings.ToLower(cause.Error()), "certificate") {
-		return "ERR_API_TLS", "[ERR_API_TLS] VPNGate API TLS 证书校验失败，程序已尝试兼容回退"
+		return "ERR_API_TLS", "[ERR_API_TLS] VPNGate API TLS 证书校验失败；为防止节点配置被篡改，程序不会跳过证书校验"
 	}
 	return "ERR_API_HTTP", fmt.Sprintf("[ERR_API_HTTP] VPNGate API 请求失败: %v", cause)
 }
@@ -187,7 +187,7 @@ func DiagnoseOpenVPNFailure(output string, cause error) (string, string) {
 		return "ERR_VPN_REFUSED", "OpenVPN 服务端拒绝连接"
 	case strings.Contains(lower, "network is unreachable") || strings.Contains(lower, "no route to host"):
 		return "ERR_VPN_ROUTE", "服务器到 VPN 节点的网络路由不可达"
-	case strings.Contains(lower, "cannot open tun") || strings.Contains(lower, "tun/tap") && strings.Contains(lower, "failed") || strings.Contains(lower, "no tap-windows adapters") || strings.Contains(lower, "failed to open wintun") || strings.Contains(lower, "tap-windows6 adapters on this system"):
+	case strings.Contains(lower, "cannot open tun") || strings.Contains(lower, "tun/tap") && strings.Contains(lower, "failed") || strings.Contains(lower, "no tap-windows adapters") || strings.Contains(lower, "failed to open wintun") || strings.Contains(lower, "wintun adapters on this system") || strings.Contains(lower, "tap-windows6 adapters on this system") || strings.Contains(lower, "ovpn-dco") && strings.Contains(lower, "failed"):
 		return "ERR_VPN_DRIVER", "无法打开 OpenVPN 虚拟网卡；Windows 请以管理员/SYSTEM 权限运行，或准备可用的 Wintun/TAP/DCO 驱动，Linux 请检查 /dev/net/tun"
 	case strings.Contains(lower, "options error") || strings.Contains(lower, "unrecognized option"):
 		return "ERR_VPN_CONFIG", "OpenVPN 配置或版本不兼容"
