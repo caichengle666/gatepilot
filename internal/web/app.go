@@ -674,6 +674,22 @@ func (a *Application) updateSettings(writer http.ResponseWriter, request *http.R
 		if value, ok := payload["fav_fail_fallback"].(bool); ok {
 			ui.FavoriteFallback = value
 		}
+		if value, ok := payload["split_routing"].(bool); ok {
+			ui.SplitRouting = value
+		}
+		if value, ok := payload["split_default"].(string); ok {
+			if value != "direct" && value != "vpn" {
+				return errors.New("无效的分流默认动作")
+			}
+			ui.SplitDefault = value
+		}
+		if raw, exists := payload["split_rules"]; exists {
+			rules, parseErr := parseSplitRules(raw)
+			if parseErr != nil {
+				return parseErr
+			}
+			ui.SplitRules = rules
+		}
 		if ui.RoutingMode == "fixed_region" && ui.ForceCountry == "" {
 			return errors.New("启用固定地区前，请先选择一个要锁定的国家")
 		}
@@ -700,6 +716,7 @@ func (a *Application) updateSettings(writer http.ResponseWriter, request *http.R
 		writeOperationResult(writer, "", err)
 		return
 	}
+	a.reloadSplitRouting()
 	a.enforceRoutingSettings()
 	if proxyAuthChanged && a.Proxy != nil {
 		username, password, _ := store.ProxyCredentials(uiSnapshot(a.Store))
@@ -719,6 +736,35 @@ func (a *Application) updateSettings(writer http.ResponseWriter, request *http.R
 	writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true, "restart_needed": restartNeeded, "message": message})
 }
 
+func parseSplitRules(raw any) ([]store.SplitRule, error) {
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, errors.New("分流规则格式无效")
+	}
+	rules := make([]store.SplitRule, 0, len(list))
+	for _, item := range list {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			return nil, errors.New("分流规则条目格式无效")
+		}
+		kind, _ := entry["kind"].(string)
+		value, _ := entry["value"].(string)
+		action, _ := entry["action"].(string)
+		switch kind {
+		case "domain", "keyword", "cidr", "geosite", "geoip":
+		default:
+			return nil, fmt.Errorf("无效的分流规则类型: %s", kind)
+		}
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		if action != "direct" && action != "vpn" {
+			return nil, errors.New("无效的分流动作")
+		}
+		rules = append(rules, store.SplitRule{Kind: kind, Value: strings.TrimSpace(value), Action: action})
+	}
+	return rules, nil
+}
 func (a *Application) scheduleWebRestart() {
 	if store.EnvBool("AIMILIVPN_NO_AUTO_RESTART", false) {
 		return

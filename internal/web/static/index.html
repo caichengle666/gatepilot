@@ -1180,7 +1180,15 @@
                     <button type="button" onclick="applyGeoPresets()" class="btn-secondary" style="height: 32px; padding: 0 12px; color: var(--success);">应用 Geo 直连规则</button>
                     <button type="button" onclick="clearSplitRules()" class="btn-secondary" style="height: 32px; padding: 0 12px; color: var(--danger);">清空规则</button>
                   </div>
-                  <div class="settings-help">支持 domain、keyword、cidr、geosite 和 geoip。</div>
+                  <div class="settings-help" style="line-height: 1.7;">
+                    规则从上到下依次匹配，命中即按该规则的动作处理：<br>
+                    · <b>domain</b> 域名后缀，如 <code>baidu.com</code> 匹配 www.baidu.com、tieba.baidu.com<br>
+                    · <b>keyword</b> 域名包含关键词，如 <code>google</code> 匹配所有含 google 的域名<br>
+                    · <b>cidr</b> IP 或网段，如 <code>192.168.0.0/16</code>、<code>10.0.0.1</code><br>
+                    · <b>geosite</b> 按 Geo 站点分类，如 <code>geosite:cn</code>（中国常见网站）、<code>geosite:private</code>（内网/局域网域名）<br>
+                    · <b>geoip</b> 按 Geo IP 归属，如 <code>geoip:cn</code>（中国 IP 段）、<code>geoip:private</code>（私有/保留 IP 段）<br>
+                    动作「直连」表示该目标不经过 VPN 直接访问，「走 VPN」表示强制经过隧道。
+                  </div>
                 </div>
               </div>
             </div>
@@ -2200,6 +2208,15 @@ function selectOptionCard(groupName, value) {
         card.classList.remove("active");
       }
     });
+  } else if (groupName === 'split_default') {
+    const cards = document.querySelectorAll("#split_default_group .option-card");
+    cards.forEach(card => {
+      if (card.getAttribute("data-value") === value) {
+        card.classList.add("active");
+      } else {
+        card.classList.remove("active");
+      }
+    });
   }
 }
 
@@ -2396,6 +2413,9 @@ function openNetworkModal() {
     selectOptionCard('routing_ip_type', ipType);
   }
 
+  const submitBtnReset = $("network_submit_btn");
+  submitBtnReset.disabled = false;
+  submitBtnReset.textContent = "保存修改";
   $("network_speed_test_result").textContent = "";
   toggleProxyAuthFields();
   

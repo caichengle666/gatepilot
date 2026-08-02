@@ -109,6 +109,41 @@ func TestWebLoginAndAPIs(t *testing.T) {
 	if response.StatusCode != http.StatusOK || !gateway.OK || len(gateway.Services) != 6 {
 		t.Fatalf("unexpected gateway response: status=%s payload=%+v", response.Status, gateway)
 	}
+
+	updateBody, _ := json.Marshal(map[string]any{
+		"split_routing": true,
+		"split_default": "direct",
+		"split_rules": []map[string]string{
+			{"kind": "geosite", "value": "geosite:cn", "action": "direct"},
+		},
+	})
+	response, err = client.Post(server.URL+"/testsecret/api/update_settings", "application/json", bytes.NewReader(updateBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("split settings update failed: %s", response.Status)
+	}
+
+	response, err = client.Get(server.URL + "/testsecret/api/split_routing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var splitRouting struct {
+		OK           bool              `json:"ok"`
+		SplitRouting bool              `json:"split_routing"`
+		SplitDefault string            `json:"split_default"`
+		SplitRules   []store.SplitRule `json:"split_rules"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&splitRouting); err != nil {
+		_ = response.Body.Close()
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || !splitRouting.OK || !splitRouting.SplitRouting || splitRouting.SplitDefault != "direct" || len(splitRouting.SplitRules) != 1 {
+		t.Fatalf("unexpected split routing response: status=%s payload=%+v", response.Status, splitRouting)
+	}
 }
 
 func TestCredentialUpdateKeepsServerAvailable(t *testing.T) {
@@ -182,6 +217,11 @@ func TestUpdateSettingsPersistsNetworkDownloads(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{
 		"upstream_proxy": "127.0.0.1:7890",
 		"speed_test_url": "https://example.com/download?bytes=1000000",
+		"split_routing":  true,
+		"split_default":  "direct",
+		"split_rules": []map[string]string{
+			{"kind": "geosite", "value": "geosite:cn", "action": "direct"},
+		},
 	})
 	request := httptest.NewRequest(http.MethodPost, "/api/update_settings", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -197,6 +237,12 @@ func TestUpdateSettingsPersistsNetworkDownloads(t *testing.T) {
 	if ui.SpeedTestURL != "https://example.com/download?bytes=1000000" {
 		t.Fatalf("speed test URL = %q", ui.SpeedTestURL)
 	}
+	if !ui.SplitRouting || ui.SplitDefault != "direct" {
+		t.Fatalf("split routing = %v, default = %q", ui.SplitRouting, ui.SplitDefault)
+	}
+	if len(ui.SplitRules) != 1 || ui.SplitRules[0].Kind != "geosite" || ui.SplitRules[0].Value != "geosite:cn" || ui.SplitRules[0].Action != "direct" {
+		t.Fatalf("split rules = %#v", ui.SplitRules)
+	}
 	reloaded, err := store.New(config)
 	if err != nil {
 		t.Fatal(err)
@@ -207,6 +253,9 @@ func TestUpdateSettingsPersistsNetworkDownloads(t *testing.T) {
 	}
 	if reloadedUI.SpeedTestURL != ui.SpeedTestURL {
 		t.Fatalf("persisted speed test URL = %q", reloadedUI.SpeedTestURL)
+	}
+	if !reloadedUI.SplitRouting || reloadedUI.SplitDefault != "direct" || len(reloadedUI.SplitRules) != 1 {
+		t.Fatalf("persisted split routing = %v, default = %q, rules = %#v", reloadedUI.SplitRouting, reloadedUI.SplitDefault, reloadedUI.SplitRules)
 	}
 
 	body, _ = json.Marshal(map[string]any{"upstream_proxy": "ftp://127.0.0.1:21"})
