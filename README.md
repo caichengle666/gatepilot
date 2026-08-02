@@ -106,7 +106,15 @@ docker compose logs -f gatepilot
 
 默认发布 Web 端口 `8787`，代理端口仅绑定宿主机 `127.0.0.1:7928`。持久化数据保存在当前目录的 `data/`。首次启动的管理地址、用户名和密码可通过日志查看，也保存在 `data/ui_auth.json`。
 
-GitHub Actions 会自动执行测试，生成 Linux amd64/arm64、Windows amd64、macOS amd64/arm64 构建产物，并将 Linux amd64/arm64 Docker 镜像发布到：
+Docker 镜像只包含 Linux 共享代码和 Linux OpenVPN，不包含 Windows OpenVPN 二进制。
+
+GitHub Actions 会自动执行测试，生成 Linux amd64/arm64、Windows amd64、macOS amd64/arm64 构建产物。推送 `v*` tag 时会创建 GitHub Release，并自动从 OpenVPN 官方下载 Windows 核心文件，打包成 Windows 便携版 zip：
+
+```text
+gatepilot-<版本>-windows-amd64-portable.zip
+```
+
+Linux amd64/arm64 Docker 镜像发布到：
 
 ```text
 ghcr.io/caichengle666/gatepilot:latest
