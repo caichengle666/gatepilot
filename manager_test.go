@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -20,6 +24,33 @@ func TestParseVPNGateCSV(t *testing.T) {
 	got := nodes[0]
 	if got.Country != "日本" || got.RemoteHost != "203.0.113.8" || got.RemotePort != 1194 || got.Protocol != "udp" {
 		t.Fatalf("unexpected node: %+v", got)
+	}
+}
+
+func TestFetchAttemptUsesUpstreamProxy(t *testing.T) {
+	profile := "client\nproto tcp\nremote 203.0.113.8 443\n"
+	csvText := "#HostName,IP,Score,Ping,Speed,CountryLong,CountryShort,NumVpnSessions,TotalUsers,TotalTraffic,LogType,Message,OpenVPN_ConfigData_Base64\n" +
+		"vpn.example,203.0.113.8,100,42,9000000,Japan,JP,5,10,1000,2weeks,ok," + base64.StdEncoding.EncodeToString([]byte(profile)) + "\n*\n"
+	var called atomic.Bool
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		called.Store(true)
+		_, _ = writer.Write([]byte(csvText))
+	}))
+	defer proxyServer.Close()
+
+	application := &store{
+		config: appConfig{MaxScanRows: 10},
+		ui:     uiConfig{UpstreamProxy: proxyServer.URL},
+	}
+	nodes, err := application.fetchAttempt(context.Background(), "http://vpngate.invalid/api/iphone/", false)
+	if err != nil {
+		t.Fatalf("fetchAttempt returned error: %v", err)
+	}
+	if !called.Load() {
+		t.Fatal("upstream proxy was not used")
+	}
+	if len(nodes) != 1 || nodes[0].HostName != "vpn.example" {
+		t.Fatalf("unexpected nodes: %+v", nodes)
 	}
 }
 

@@ -154,7 +154,7 @@ func (application *store) fetchAttempt(ctx context.Context, endpoint string, ins
 	}
 	request.Header.Set("User-Agent", "gatepilot-go/1.0")
 	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure}}
-	if proxyURL, proxyErr := parseProxyURL(getenv("UPSTREAM_PROXY")); proxyErr == nil && proxyURL != nil {
+	if proxyURL, proxyErr := parseProxyURL(application.upstreamProxy()); proxyErr == nil && proxyURL != nil {
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}
 	client := &http.Client{Timeout: 25 * time.Second, Transport: transport}

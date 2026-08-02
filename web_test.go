@@ -162,3 +162,48 @@ func TestCredentialUpdateKeepsServerAvailable(t *testing.T) {
 		t.Fatalf("new credentials login returned %s", response.Status)
 	}
 }
+
+func TestUpdateSettingsPersistsUpstreamProxy(t *testing.T) {
+	config := loadAppConfig()
+	config.DataDir = t.TempDir()
+	application, err := newStore(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	web := newWebApplication(application, newVPNController(application))
+	body, _ := json.Marshal(map[string]any{"upstream_proxy": "127.0.0.1:7890"})
+	request := httptest.NewRequest(http.MethodPost, "/api/update_settings", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	web.updateSettings(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("update returned %d: %s", recorder.Code, recorder.Body.String())
+	}
+	ui, _, _ := application.snapshot()
+	if ui.UpstreamProxy != "http://127.0.0.1:7890" {
+		t.Fatalf("upstream proxy = %q", ui.UpstreamProxy)
+	}
+	reloaded, err := newStore(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloadedUI, _, _ := reloaded.snapshot()
+	if reloadedUI.UpstreamProxy != ui.UpstreamProxy {
+		t.Fatalf("persisted upstream proxy = %q", reloadedUI.UpstreamProxy)
+	}
+
+	body, _ = json.Marshal(map[string]any{"upstream_proxy": "ftp://127.0.0.1:21"})
+	request = httptest.NewRequest(http.MethodPost, "/api/update_settings", bytes.NewReader(body))
+	recorder = httptest.NewRecorder()
+	web.updateSettings(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("invalid proxy returned %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestIndexShowsUpstreamProxyAndNodeLatency(t *testing.T) {
+	for _, expected := range []string{"net_upstream_proxy", "节点延迟", "${latencyText}${testBtn}"} {
+		if !strings.Contains(indexHTML, expected) {
+			t.Fatalf("index is missing %q", expected)
+		}
+	}
+}

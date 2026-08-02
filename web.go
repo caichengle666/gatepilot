@@ -170,7 +170,7 @@ func (application *webApplication) handleGET(writer http.ResponseWriter, request
 
 func publicUIConfig(ui uiConfig) map[string]any {
 	return map[string]any{
-		"host": ui.Host, "port": ui.Port, "proxy_port": ui.ProxyPort,
+		"host": ui.Host, "port": ui.Port, "proxy_port": ui.ProxyPort, "upstream_proxy": ui.UpstreamProxy,
 		"routing_mode": ui.RoutingMode, "force_country": ui.ForceCountry,
 		"routing_ip_type": ui.RoutingIPType, "connection_enabled": ui.ConnectionEnabled,
 		"fixed_node_id": ui.FixedNodeID, "favorite_node_ids": ui.FavoriteNodeIDs,
@@ -187,6 +187,7 @@ func statePayload(ui uiConfig, state runtimeState) map[string]any {
 	result["secret_path"] = ui.SecretPath
 	result["password_set"] = ui.Password != ""
 	result["proxy_port"] = ui.ProxyPort
+	result["upstream_proxy"] = ui.UpstreamProxy
 	result["routing_mode"] = ui.RoutingMode
 	result["force_country"] = ui.ForceCountry
 	result["routing_ip_type"] = ui.RoutingIPType
@@ -502,6 +503,21 @@ func (application *webApplication) updateSettings(writer http.ResponseWriter, re
 			return
 		}
 		ui.ProxyPort = value
+	}
+	if raw, exists := payload["upstream_proxy"]; exists {
+		value, ok := raw.(string)
+		if !ok {
+			application.store.mu.Unlock()
+			writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": "前置代理格式无效"})
+			return
+		}
+		normalized, err := normalizeProxyURL(value)
+		if err != nil {
+			application.store.mu.Unlock()
+			writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": "前置代理格式无效: " + err.Error()})
+			return
+		}
+		ui.UpstreamProxy = normalized
 	}
 	if ui.Port == ui.ProxyPort {
 		application.store.mu.Unlock()

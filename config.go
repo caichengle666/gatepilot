@@ -76,6 +76,7 @@ type uiConfig struct {
 	Host              string   `json:"host"`
 	Port              int      `json:"port"`
 	ProxyPort         int      `json:"proxy_port"`
+	UpstreamProxy     string   `json:"upstream_proxy"`
 	RoutingMode       string   `json:"routing_mode"`
 	ForceCountry      string   `json:"force_country"`
 	RoutingIPType     string   `json:"routing_ip_type"`
@@ -206,6 +207,7 @@ func newStore(config appConfig) (*store, error) {
 		Host:              config.UIHost,
 		Port:              config.UIPort,
 		ProxyPort:         config.ProxyPort,
+		UpstreamProxy:     strings.TrimSpace(os.Getenv("UPSTREAM_PROXY")),
 		RoutingMode:       "auto",
 		RoutingIPType:     "all",
 		ConnectionEnabled: true,
@@ -345,6 +347,12 @@ func (application *store) snapshot() (uiConfig, runtimeState, []node) {
 	application.mu.RLock()
 	defer application.mu.RUnlock()
 	return application.ui, application.state, append([]node(nil), application.nodes...)
+}
+
+func (application *store) upstreamProxy() string {
+	application.mu.RLock()
+	defer application.mu.RUnlock()
+	return application.ui.UpstreamProxy
 }
 
 func (application *store) nodeByID(id string) (node, bool) {

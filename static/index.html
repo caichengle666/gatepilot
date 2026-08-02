@@ -1050,6 +1050,7 @@
             <th>物理位置</th>
             <th>运营主体 / ISP</th>
             <th style="width: 110px;">IP 类型</th>
+            <th style="width: 150px;">节点延迟</th>
             <th style="width: 180px;">操作</th>
           </tr>
         </thead>
@@ -1139,6 +1140,12 @@
         <div class="form-group" style="margin-bottom: 16px;">
           <label class="form-label" for="net_proxy_port">HTTP/SOCKS5 代理出站端口</label>
           <input type="number" id="net_proxy_port" class="input-field" required min="1024" max="65535" placeholder="7928">
+        </div>
+
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label" for="net_upstream_proxy">前置代理（可选）</label>
+          <input type="text" id="net_upstream_proxy" class="input-field" placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080">
+          <div style="font-size: 12px; color: var(--text-secondary); margin-top: 6px; line-height: 1.5;">用于拉取 VPNGate API 和 TCP OpenVPN 节点；UDP 节点不支持 HTTP/SOCKS5 前置代理。留空表示直连。</div>
         </div>
 
         <div style="border-top: 1px dashed rgba(255,255,255,0.08); padding-top: 16px; margin-bottom: 16px;">
@@ -1679,7 +1686,7 @@ function render(){
 
   // Render table rows
   if (currentPageNodes.length === 0) {
-    $("rows").innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--text-secondary); padding: 40px 0;">未找到符合过滤条件的备选节点。</td></tr>`;
+    $("rows").innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-secondary); padding: 40px 0;">未找到符合过滤条件的备选节点。</td></tr>`;
   } else {
     $("rows").innerHTML=currentPageNodes.map(n=>{
       if (!n) return '';
@@ -1716,6 +1723,7 @@ function render(){
         <td style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(displayLocation)}">${esc(displayLocation)}</td>
         <td style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(n.owner||n.as_name||"-")}">${esc(n.owner||n.as_name||"-")}</td>
         <td style="white-space: nowrap; max-width: 110px; overflow: hidden; text-overflow: ellipsis;" title="${esc(translateIpType(n.ip_type))}">${esc(translateIpType(n.ip_type))}</td>
+        <td><div class="table-actions">${latencyText}${testBtn}</div></td>
         <td>
           <div class="table-actions">
             ${favBtn}
@@ -2309,6 +2317,7 @@ function openNetworkModal() {
   
   if (state) {
     $("net_proxy_port").value = state.proxy_port || 7928;
+    $("net_upstream_proxy").value = state.upstream_proxy || "";
     const mode = state.routing_mode || "auto";
     const ipType = state.routing_ip_type || "all";
     
@@ -2335,6 +2344,7 @@ async function saveNetwork(e) {
   successDiv.style.display = "none";
   
   const proxyPort = parseInt($("net_proxy_port").value);
+  const upstreamProxy = $("net_upstream_proxy").value.trim();
   const routingMode = $("net_routing_mode").value;
   const forceCountry = $("net_force_country").value;
   const routingIpType = $("net_routing_ip_type").value;
@@ -2371,6 +2381,7 @@ async function saveNetwork(e) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         proxy_port: proxyPort,
+        upstream_proxy: upstreamProxy,
         routing_mode: routingMode,
         force_country: forceCountry,
         routing_ip_type: routingIpType

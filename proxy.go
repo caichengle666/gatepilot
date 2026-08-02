@@ -320,3 +320,22 @@ func parseProxyURL(raw string) (*url.URL, error) {
 	}
 	return url.Parse(value)
 }
+
+func normalizeProxyURL(raw string) (string, error) {
+	proxyURL, err := parseProxyURL(raw)
+	if err != nil {
+		return "", err
+	}
+	if proxyURL == nil {
+		return "", nil
+	}
+	switch strings.ToLower(proxyURL.Scheme) {
+	case "http", "https", "socks", "socks5":
+	default:
+		return "", fmt.Errorf("unsupported proxy scheme %q", proxyURL.Scheme)
+	}
+	if proxyURL.Hostname() == "" {
+		return "", errors.New("proxy host is required")
+	}
+	return proxyURL.String(), nil
+}

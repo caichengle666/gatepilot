@@ -22,7 +22,9 @@ OpenVPN 进程 → Linux tun0 / Windows Wintun 或 TAP
 
 - 从 `https://www.vpngate.net/api/iphone/` 获取 OpenVPN 节点。
 - 解析国家、IP、端口、协议、分数、速度和会话数。
+- 在节点列表显示握手测速延迟，并支持手动重新检测单个节点。
 - 支持自动、固定国家、固定节点和收藏优先筛选。
+- 支持在 Web 页面配置 HTTP/SOCKS5 前置代理，用于 VPNGate API 和 TCP OpenVPN 连接。
 - 启动并监控外部 OpenVPN 进程。
 - 清理远端配置中的脚本、插件和管理接口等危险指令。
 - 在 Linux 上绑定 `tun0`，在 Windows 上自动识别 OpenVPN 网卡并绑定代理出站，避免流量绕过 VPN。
@@ -37,7 +39,7 @@ OpenVPN 进程 → Linux tun0 / Windows Wintun 或 TAP
 - Go 1.18 或更高版本。
 - OpenVPN；Linux 还需要 `iproute2` 和 CA 证书。
 
-Windows 原生模式支持 OpenVPN 2.4 及以上版本。GatePilot 会自动查找 `C:\Program Files\OpenVPN\bin\openvpn.exe`；OpenVPN 2.5/2.6 使用 Wintun，2.7 及以上使用 OpenVPN 默认的 Windows 驱动，并把本地 HTTP/SOCKS5 代理的 TCP 和 DNS 出站绑定到该虚拟网卡。
+Windows 原生模式支持 OpenVPN 2.4 及以上版本。GatePilot 会自动查找 `C:\Program Files\OpenVPN\bin\openvpn.exe`，由 OpenVPN 自动选择已安装的 DCO、Wintun 或 TAP 驱动，并把本地 HTTP/SOCKS5 代理的 TCP 和 DNS 出站绑定到该虚拟网卡。
 
 ## Windows 运行
 
@@ -158,7 +160,7 @@ export LOCAL_PROXY_PASS=your-strong-password
 | `LOCAL_PROXY_PASS` | 空 | 代理认证密码 |
 | `UI_HOST` | `::` | Web 监听地址 |
 | `UI_PORT` | `8787` | Web 端口 |
-| `UPSTREAM_PROXY` | 空 | 获取节点和 TCP OpenVPN 的上游代理 |
+| `UPSTREAM_PROXY` | 空 | 前置代理初始值；可在 Web 页面修改，用于获取节点和 TCP OpenVPN |
 | `RECONNECT_INTERVAL_SECONDS` | `15` | 断线检查和自动重连周期 |
 | `TARGET_VALID_NODES` | `3` | 每轮探测节点数 |
 | `DISABLE_BACKGROUND_FETCH` | `false` | 禁用后台拉取，适合开发测试 |

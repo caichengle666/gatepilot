@@ -86,7 +86,7 @@ func (controller *vpnController) commandFor(candidate node, configPath, device s
 		arguments = append(arguments, "--capath", "/etc/ssl/certs")
 	}
 	if strings.HasPrefix(strings.ToLower(candidate.Protocol), "tcp") {
-		proxyURL, proxyErr := parseProxyURL(getenv("UPSTREAM_PROXY"))
+		proxyURL, proxyErr := parseProxyURL(controller.application.upstreamProxy())
 		if proxyErr != nil {
 			return nil, proxyErr
 		}
