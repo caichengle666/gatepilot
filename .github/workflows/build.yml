@@ -134,7 +134,7 @@ jobs:
 
           for directory in artifacts/*/; do
             name="$(basename "$directory")"
-            cp "${directory}"* "release/${name#gatepilot-}"
+            cp "${directory}"* "release/${name}"
           done
 
           for file in release/gatepilot-*; do
