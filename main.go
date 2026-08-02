@@ -5,37 +5,43 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/caichengle666/gatepilot/internal/proxy"
+	"github.com/caichengle666/gatepilot/internal/store"
+	"github.com/caichengle666/gatepilot/internal/vpn"
+	"github.com/caichengle666/gatepilot/internal/web"
 )
 
 func main() {
-	config := loadAppConfig()
-	application, err := newStore(config)
+	ensureAdminElevation()
+	config := store.LoadAppConfig()
+	application, err := store.New(config)
 	if err != nil {
 		log.Fatalf("初始化数据目录失败: %v", err)
 	}
-	vpn := newVPNController(application)
-	web := newWebApplication(application, vpn)
-	proxy := newProxyServer(application.config)
-	web.proxy = proxy
-	ui, _, _ := application.snapshot()
+	vpnCtrl := vpn.NewController(application)
+	webApp := web.NewApplication(application, vpnCtrl)
+	proxyServer := proxy.NewServer(application.Config)
+	webApp.Proxy = proxyServer
+	ui, _, _ := application.Snapshot()
 	log.Printf("管理地址: http://127.0.0.1:%d/%s/", ui.Port, ui.SecretPath)
 	log.Printf("初始账号: %s  密码: %s", ui.Username, ui.Password)
 	go func() {
-		if err := proxy.serve(); err != nil {
+		if err := proxyServer.Serve(); err != nil {
 			log.Printf("本地代理服务停止: %v", err)
 		}
 	}()
-	if !application.config.DisableBackground {
-		go backgroundMaintenance(web)
+	if !application.Config.DisableBackground {
+		go web.BackgroundMaintenance(webApp)
 	}
 	go func() {
 		signals := make(chan os.Signal, 1)
 		signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 		<-signals
-		vpn.stop("服务正在退出")
+		vpnCtrl.Stop("服务正在退出")
 		os.Exit(0)
 	}()
-	if err := web.serve(); err != nil {
+	if err := webApp.Serve(); err != nil {
 		log.Fatalf("Web 管理服务停止: %v", err)
 	}
 }

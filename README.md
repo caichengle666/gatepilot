@@ -25,7 +25,9 @@ OpenVPN 进程 → Linux tun0 / Windows Wintun 或 TAP
 - 在节点列表显示握手测速延迟，并支持手动重新检测单个节点。
 - 通过当前 VPN 代理下载测试数据，显示实际宽带速度（Mbps）。
 - 支持自动、固定国家、固定节点和收藏优先筛选。
-- 支持在 Web 页面配置 HTTP/SOCKS5 前置代理，用于 VPNGate API 和 TCP OpenVPN 连接。
+- 支持在 Web 页面配置 HTTP/SOCKS5 前置代理，用于拉取 VPNGate API 节点列表，以及帮助 TCP OpenVPN 节点建立隧道；应用流量连接成功后只走 VPN 隧道，不会经过前置代理。UDP 节点直连，不使用前置代理。
+- 支持自定义宽带测速网址，通过当前 VPN 代理下载最多 20 MB 数据并计算真实网速。
+  默认测速地址为 `https://speed.cloudflare.com/__down?bytes=10000000`。
 - 启动并监控外部 OpenVPN 进程。
 - 清理远端配置中的脚本、插件和管理接口等危险指令。
 - 在 Linux 上绑定 `tun0`，在 Windows 上自动识别 OpenVPN 网卡并绑定代理出站，避免流量绕过 VPN。
@@ -40,13 +42,23 @@ OpenVPN 进程 → Linux tun0 / Windows Wintun 或 TAP
 - Go 1.18 或更高版本。
 - OpenVPN；Linux 还需要 `iproute2` 和 CA 证书。
 
-Windows 原生模式支持 OpenVPN 2.4 及以上版本。GatePilot 会自动查找 `C:\Program Files\OpenVPN\bin\openvpn.exe`，由 OpenVPN 自动选择已安装的 DCO、Wintun 或 TAP 驱动，并把本地 HTTP/SOCKS5 代理的 TCP 和 DNS 出站绑定到该虚拟网卡。
+Windows 原生模式支持 OpenVPN 2.4 及以上版本。GatePilot 会按以下顺序查找 OpenVPN：
+
+1. `OPENVPN_CMD` 指定的命令或完整路径；
+2. GatePilot 可执行文件旁的 `openvpn\openvpn.exe` 便携核心目录；
+3. GatePilot 可执行文件旁的 `openvpn.exe`；
+4. `C:\Program Files\OpenVPN\bin\openvpn.exe`；
+5. `PATH` 中的 `openvpn.exe`。
+
+OpenVPN 2.6 及以上在 Windows 上默认使用 Wintun 驱动，并把本地 HTTP/SOCKS5 代理的 TCP 和 DNS 出站绑定到该虚拟网卡。
 
 ## Windows 运行
 
-1. 从 OpenVPN 官方安装包安装 OpenVPN Community，安装时保留虚拟网卡驱动。
-2. 从 GitHub Actions 下载 `gatepilot-windows-amd64.exe`。
-3. 右键选择“以管理员身份运行”。
+1. 从 GitHub Actions 下载 `gatepilot-windows-amd64.exe`。
+2. 准备 OpenVPN 核心：
+   - 轻量方式：在 `gatepilot-windows-amd64.exe` 旁创建 `openvpn\` 目录，放入 `openvpn.exe` 和同版本配套 DLL；
+   - 或安装 OpenVPN Community，安装时保留虚拟网卡驱动。
+3. 右键选择“以管理员身份运行”。Wintun 虚拟网卡需要管理员/SYSTEM 权限；非管理员运行时 OpenVPN 会报 `Wintun requires SYSTEM privileges`。
 4. 从终端输出打开管理地址，并在页面连接节点。
 5. 将需要走 VPN 的应用代理设置为 `127.0.0.1:7928`，协议使用 HTTP 或 SOCKS5。
 
@@ -152,7 +164,7 @@ export LOCAL_PROXY_PASS=your-strong-password
 | --- | --- | --- |
 | `VPNGATE_DATA_DIR` | 可执行文件旁的 `vpngate_data` | 数据目录 |
 | `VPNGATE_API_URL` | VPNGate 官方 API | 节点数据地址 |
-| `OPENVPN_CMD` | Linux 为 `openvpn`；Windows 自动查找 | OpenVPN 命令或完整路径 |
+| `OPENVPN_CMD` | Linux 为 `openvpn`；Windows 优先查找程序旁 `openvpn\openvpn.exe` | OpenVPN 命令或完整路径 |
 | `LOCAL_PROXY_HOST` | `127.0.0.1` | 代理监听地址 |
 | `LOCAL_PROXY_PORT` | `7928` | 代理端口 |
 | `LOCAL_PROXY_MAX_CONNECTIONS` | `256` | 最大并发连接数 |
@@ -161,7 +173,7 @@ export LOCAL_PROXY_PASS=your-strong-password
 | `LOCAL_PROXY_PASS` | 空 | 代理认证密码 |
 | `UI_HOST` | `::` | Web 监听地址 |
 | `UI_PORT` | `8787` | Web 端口 |
-| `UPSTREAM_PROXY` | 空 | 前置代理初始值；可在 Web 页面修改，用于获取节点和 TCP OpenVPN |
+| `UPSTREAM_PROXY` | 空 | 前置代理初始值；可在 Web 页面修改，用于拉取节点列表和帮助 TCP 节点建立隧道 |
 | `SPEED_TEST_URL` | Cloudflare 10 MB 下载接口 | 宽带测速地址；可在 Web 页面修改，单次最多读取 20 MB |
 | `RECONNECT_INTERVAL_SECONDS` | `15` | 断线检查和自动重连周期 |
 | `TARGET_VALID_NODES` | `3` | 每轮探测节点数 |

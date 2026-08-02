@@ -1,0 +1,685 @@
+package web
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/caichengle666/gatepilot/internal/proxy"
+	"github.com/caichengle666/gatepilot/internal/store"
+	"github.com/caichengle666/gatepilot/internal/vpn"
+)
+
+// Application 是 Web 管理服务。
+type Application struct {
+	Store      *store.Store
+	VPN        *vpn.Controller
+	Proxy      *proxy.Server
+	startedAt  time.Time
+	server     *http.Server
+	serverMu   sync.Mutex
+	sessionsMu sync.Mutex
+	sessions   map[string]time.Time
+	Operations sync.Mutex
+	speedTests sync.Mutex
+}
+
+// NewApplication 创建 Web 管理服务。
+func NewApplication(application *store.Store, vpnCtrl *vpn.Controller) *Application {
+	return &Application{Store: application, VPN: vpnCtrl, startedAt: time.Now(), sessions: map[string]time.Time{}}
+}
+
+// Serve 启动 HTTP 监听，端口变更后自动重启。
+func (a *Application) Serve() error {
+	for {
+		ui, _, _ := a.Store.Snapshot()
+		address := net.JoinHostPort(ui.Host, strconv.Itoa(ui.Port))
+		server := &http.Server{Addr: address, Handler: a, ReadHeaderTimeout: 10 * time.Second}
+		a.serverMu.Lock()
+		a.server = server
+		a.serverMu.Unlock()
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+func (a *Application) restartServer() {
+	a.serverMu.Lock()
+	server := a.server
+	a.serverMu.Unlock()
+	if server == nil {
+		return
+	}
+	go server.Shutdown(context.Background())
+}
+
+func (a *Application) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	ui, _, _ := a.Store.Snapshot()
+	if request.URL.Path == "/"+strings.Trim(ui.SecretPath, "/") {
+		http.Redirect(writer, request, request.URL.Path+"/", http.StatusFound)
+		return
+	}
+	path, ok := a.effectivePath(request.URL.Path)
+	if !ok {
+		http.NotFound(writer, request)
+		return
+	}
+	if request.Method == http.MethodPost && path == "/api/login" {
+		a.login(writer, request)
+		return
+	}
+	if !a.authorized(request) {
+		if request.Method == http.MethodGet && (path == "/" || path == "/index.html") {
+			writeHTML(writer, loginHTML)
+			return
+		}
+		writeJSONResponse(writer, http.StatusUnauthorized, map[string]any{"ok": false, "error": "Unauthorized"})
+		return
+	}
+	if request.Method == http.MethodGet {
+		a.handleGET(writer, request, path)
+		return
+	}
+	if request.Method == http.MethodPost {
+		a.handlePOST(writer, request, path)
+		return
+	}
+	writer.WriteHeader(http.StatusMethodNotAllowed)
+}
+
+func (a *Application) effectivePath(path string) (string, bool) {
+	ui, _, _ := a.Store.Snapshot()
+	prefix := "/" + strings.Trim(ui.SecretPath, "/")
+	if strings.HasPrefix(path, prefix+"/") {
+		return "/" + strings.TrimPrefix(path, prefix+"/"), true
+	}
+	return "", false
+}
+
+func (a *Application) authorized(request *http.Request) bool {
+	cookie, err := request.Cookie("session")
+	if err != nil {
+		return false
+	}
+	a.sessionsMu.Lock()
+	defer a.sessionsMu.Unlock()
+	expires, exists := a.sessions[cookie.Value]
+	if !exists || time.Now().After(expires) {
+		delete(a.sessions, cookie.Value)
+		return false
+	}
+	return true
+}
+
+func (a *Application) login(writer http.ResponseWriter, request *http.Request) {
+	var payload struct{ Username, Password string }
+	if err := decodeJSON(request, &payload); err != nil {
+		writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	ui, _, _ := a.Store.Snapshot()
+	if payload.Username != ui.Username || payload.Password != ui.Password {
+		writeJSONResponse(writer, http.StatusForbidden, map[string]any{"ok": false, "error": "用户名或密码不正确，请重新输入"})
+		return
+	}
+	tokenBytes := make([]byte, 32)
+	_, _ = rand.Read(tokenBytes)
+	token := hex.EncodeToString(tokenBytes)
+	a.sessionsMu.Lock()
+	a.sessions[token] = time.Now().Add(30 * 24 * time.Hour)
+	a.sessionsMu.Unlock()
+	cookiePath := "/" + strings.Trim(ui.SecretPath, "/") + "/"
+	http.SetCookie(writer, &http.Cookie{Name: "session", Value: token, Path: cookiePath, HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 30 * 86400})
+	writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (a *Application) handleGET(writer http.ResponseWriter, request *http.Request, path string) {
+	switch {
+	case path == "/" || path == "/index.html":
+		writeHTML(writer, indexHTML)
+	case path == "/api/nodes":
+		ui, state, nodes := a.Store.Snapshot()
+		for index := range nodes {
+			nodes[index].ConfigText = ""
+		}
+		writeJSONResponse(writer, http.StatusOK, map[string]any{"nodes": nodes, "state": statePayload(ui, state), "ui_config": publicUIConfig(ui)})
+	case path == "/api/gateway_status":
+		writeJSONResponse(writer, http.StatusOK, a.gatewayStatus())
+	case path == "/api/logs":
+		limit, _ := strconv.Atoi(request.URL.Query().Get("limit"))
+		writeJSONResponse(writer, http.StatusOK, map[string]any{"logs": a.Store.RecentLogs(limit)})
+	case strings.HasPrefix(path, "/configs/"):
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/configs/"), ".ovpn")
+		candidate, found := a.Store.NodeByID(id)
+		if !found || candidate.ConfigText == "" {
+			http.NotFound(writer, request)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/x-openvpn-profile")
+		writer.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", store.SafeName(candidate.ID)+".ovpn"))
+		_, _ = io.WriteString(writer, candidate.ConfigText)
+	default:
+		http.NotFound(writer, request)
+	}
+}
+
+func publicUIConfig(ui store.UIConfig) map[string]any {
+	return map[string]any{
+		"host": ui.Host, "port": ui.Port, "proxy_port": ui.ProxyPort, "upstream_proxy": ui.UpstreamProxy,
+		"speed_test_url": ui.SpeedTestURL,
+		"routing_mode":   ui.RoutingMode, "force_country": ui.ForceCountry,
+		"routing_ip_type": ui.RoutingIPType, "connection_enabled": ui.ConnectionEnabled,
+		"fixed_node_id": ui.FixedNodeID, "favorite_node_ids": ui.FavoriteNodeIDs,
+		"fav_fail_fallback": ui.FavoriteFallback,
+	}
+}
+
+func statePayload(ui store.UIConfig, state store.RuntimeState) map[string]any {
+	data, _ := json.Marshal(state)
+	result := map[string]any{}
+	_ = json.Unmarshal(data, &result)
+	result["username"] = ui.Username
+	result["port"] = ui.Port
+	result["secret_path"] = ui.SecretPath
+	result["password_set"] = ui.Password != ""
+	result["proxy_port"] = ui.ProxyPort
+	result["upstream_proxy"] = ui.UpstreamProxy
+	result["speed_test_url"] = ui.SpeedTestURL
+	result["routing_mode"] = ui.RoutingMode
+	result["force_country"] = ui.ForceCountry
+	result["routing_ip_type"] = ui.RoutingIPType
+	result["connection_enabled"] = ui.ConnectionEnabled
+	result["fixed_node_id"] = ui.FixedNodeID
+	result["favorite_node_ids"] = ui.FavoriteNodeIDs
+	result["fav_fail_fallback"] = ui.FavoriteFallback
+	return result
+}
+
+func (a *Application) gatewayStatus() map[string]any {
+	ui, state, _ := a.Store.Snapshot()
+	proxyAddress := net.JoinHostPort(a.Store.Config.ProxyHost, strconv.Itoa(ui.ProxyPort))
+	probeAddress := proxyAddress
+	if a.Store.Config.ProxyHost == "::" || a.Store.Config.ProxyHost == "0.0.0.0" {
+		probeAddress = net.JoinHostPort("127.0.0.1", strconv.Itoa(ui.ProxyPort))
+	}
+	connection, proxyError := net.DialTimeout("tcp", probeAddress, 500*time.Millisecond)
+	if connection != nil {
+		_ = connection.Close()
+	}
+	service := func(name, status, details, errorMessage string) map[string]string {
+		return map[string]string{"name": name, "status": status, "details": details, "error": errorMessage}
+	}
+	proxyState, proxyMessage := "running", ""
+	if proxyError != nil {
+		proxyState, proxyMessage = "stopped", proxyError.Error()
+	}
+	vpnState := "stopped"
+	if a.VPN.Running() {
+		vpnState = "running"
+	}
+	now := time.Now()
+	uptime := now.Sub(a.startedAt)
+	heartbeatService := func(name string, heartbeat int64, allowance time.Duration, startupAllowance time.Duration, stoppedMessage string) map[string]string {
+		ok := heartbeat > 0 && now.Sub(time.Unix(heartbeat, 0)) < allowance || uptime < startupAllowance
+		status, details, errorMessage := "running", "上次心跳: 等待启动", ""
+		if heartbeat > 0 {
+			details = "上次心跳: " + time.Unix(heartbeat, 0).Format("2006-01-02 15:04:05")
+		}
+		if !ok {
+			status, errorMessage = "stopped", stoppedMessage
+		}
+		return service(name, status, details, errorMessage)
+	}
+	return map[string]any{
+		"ok": true,
+		"services": []any{
+			service("Web 管理服务", "running", net.JoinHostPort(ui.Host, strconv.Itoa(ui.Port)), ""),
+			service("本地代理网关", proxyState, proxyAddress, proxyMessage),
+			service("OpenVPN 核心连接", vpnState, state.Message, ""),
+			heartbeatService("节点同步守护线程", state.CollectorHeartbeat, a.Store.Config.FetchInterval+a.Store.Config.FetchInterval/2, 15*time.Second, "线程可能已异常终止，无法在后台拉取和测速节点"),
+			heartbeatService("出口检测守护线程", state.CheckerHeartbeat, 90*time.Second, 35*time.Second, "线程可能已挂起，无法刷新代理出口状态"),
+			heartbeatService("延迟测速守护线程", state.PingerHeartbeat, 30*time.Second, 15*time.Second, "线程可能已挂起，无法刷新节点延迟"),
+		},
+		"uptime_seconds": int64(time.Since(a.startedAt).Seconds()),
+	}
+}
+
+func (a *Application) handlePOST(writer http.ResponseWriter, request *http.Request, path string) {
+	switch path {
+	case "/api/logout":
+		if cookie, err := request.Cookie("session"); err == nil {
+			a.sessionsMu.Lock()
+			delete(a.sessions, cookie.Value)
+			a.sessionsMu.Unlock()
+		}
+		http.SetCookie(writer, &http.Cookie{Name: "session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true})
+		writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true})
+	case "/api/connect":
+		var payload struct {
+			ID string `json:"id"`
+		}
+		if err := decodeJSON(request, &payload); err != nil || payload.ID == "" {
+			writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": "节点 ID 不能为空"})
+			return
+		}
+		if !a.Operations.TryLock() {
+			writeJSONResponse(writer, http.StatusConflict, map[string]any{"ok": false, "error": "当前已有连接或节点维护任务正在运行"})
+			return
+		}
+		message, err := a.VPN.Connect(payload.ID)
+		a.Operations.Unlock()
+		writeOperationResult(writer, message, err)
+	case "/api/disconnect":
+		a.VPN.Stop("用户已断开连接")
+		writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true})
+	case "/api/refresh_nodes":
+		if !a.Operations.TryLock() {
+			writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true, "message": "节点维护任务正在运行，请稍后再试", "running": true})
+			return
+		}
+		go func() {
+			defer a.Operations.Unlock()
+			_, _ = a.maintainLocked(context.Background(), true)
+		}()
+		writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true, "message": "已在后台启动节点更新流程", "running": false})
+	case "/api/check":
+		message, err := a.maintain(request.Context(), true)
+		writeOperationResult(writer, message, err)
+	case "/api/test_node":
+		var payload struct {
+			ID string `json:"id"`
+		}
+		if err := decodeJSON(request, &payload); err != nil || payload.ID == "" {
+			writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": "节点 ID 不能为空"})
+			return
+		}
+		if !a.Operations.TryLock() {
+			writeJSONResponse(writer, http.StatusConflict, map[string]any{"ok": false, "error": "当前已有连接或节点维护任务正在运行"})
+			return
+		}
+		updated, err := a.VPN.TestNode(payload.ID)
+		a.Operations.Unlock()
+		if updated.ID == "" {
+			writeOperationResult(writer, "", err)
+			return
+		}
+		writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true, "node": updated, "error": errorText(err)})
+	case "/api/test_nodes":
+		var payload struct {
+			IDs []string `json:"ids"`
+		}
+		if err := decodeJSON(request, &payload); err != nil || len(payload.IDs) > a.Store.Config.ManualTestNodeLimit {
+			writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": fmt.Sprintf("单次最多测试 %d 个节点", a.Store.Config.ManualTestNodeLimit)})
+			return
+		}
+		if !a.Operations.TryLock() {
+			writeJSONResponse(writer, http.StatusConflict, map[string]any{"ok": false, "error": "当前已有连接或节点维护任务正在运行"})
+			return
+		}
+		nodes := a.VPN.TestNodes(payload.IDs)
+		a.Operations.Unlock()
+		writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true, "nodes": nodes})
+	case "/api/toggle_favorite":
+		var payload struct {
+			ID string `json:"id"`
+		}
+		if err := decodeJSON(request, &payload); err != nil || payload.ID == "" {
+			writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": "节点 ID 不能为空"})
+			return
+		}
+		writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true, "favorite_node_ids": a.Store.ToggleFavorite(payload.ID)})
+	case "/api/update_credentials":
+		a.updateCredentials(writer, request)
+	case "/api/update_settings", "/api/update_routing":
+		a.updateSettings(writer, request)
+	case "/api/test_proxy":
+		a.testProxy(writer)
+	case "/api/speed_test":
+		a.speedTest(writer, request)
+	default:
+		http.NotFound(writer, request)
+	}
+}
+
+func (a *Application) maintain(ctx context.Context, force bool) (string, error) {
+	if !a.Operations.TryLock() {
+		return "", errors.New("节点维护任务正在运行")
+	}
+	defer a.Operations.Unlock()
+	return a.maintainLocked(ctx, force)
+}
+
+func (a *Application) maintainLocked(ctx context.Context, force bool) (string, error) {
+	_ = a.Store.UpdateState(func(state *store.RuntimeState) {
+		state.MaintenanceRunning = true
+		state.IsConnecting = true
+		state.LastCheckMessage = "正在维护可用节点"
+	})
+	defer a.Store.UpdateState(func(state *store.RuntimeState) {
+		state.MaintenanceRunning = false
+		state.IsConnecting = false
+	})
+	if force || len(a.Store.Candidates()) == 0 {
+		if _, err := a.Store.RefreshNodes(ctx); err != nil && len(a.Store.Candidates()) == 0 {
+			return "", err
+		}
+	}
+	candidates := a.Store.Candidates()
+	valid := 0
+	for _, candidate := range candidates {
+		if candidate.ProbeStatus == "available" {
+			valid++
+		}
+	}
+	ids := make([]string, 0, a.Store.Config.InitialTestLimit)
+	for _, candidate := range candidates {
+		if valid+len(ids) >= a.Store.Config.TargetValidNodes || len(ids) >= a.Store.Config.InitialTestLimit {
+			break
+		}
+		if candidate.ProbeStatus != "available" {
+			ids = append(ids, candidate.ID)
+		}
+	}
+	tested := a.VPN.TestNodes(ids)
+	valid = 0
+	for _, candidate := range a.Store.Candidates() {
+		if candidate.ProbeStatus == "available" {
+			valid++
+		}
+	}
+	_ = a.Store.UpdateState(func(state *store.RuntimeState) {
+		state.LastCheckAt = time.Now().Unix()
+		state.ValidNodes = valid
+		state.LastCheckMessage = fmt.Sprintf("节点维护完成，可用 %d 个", valid)
+	})
+	ui, _, _ := a.Store.Snapshot()
+	if ui.ConnectionEnabled && !a.VPN.Running() {
+		if ui.RoutingMode == "fixed_ip" && ui.FixedNodeID != "" {
+			return a.VPN.Connect(ui.FixedNodeID)
+		}
+		for _, candidate := range a.Store.Candidates() {
+			if candidate.ProbeStatus != "available" {
+				continue
+			}
+			if message, err := a.VPN.Connect(candidate.ID); err == nil {
+				return message, nil
+			}
+		}
+	}
+	return fmt.Sprintf("节点维护完成，测试了 %d 个节点，可用 %d 个", len(tested), valid), nil
+}
+
+func (a *Application) updateCredentials(writer http.ResponseWriter, request *http.Request) {
+	var payload struct {
+		Username   string `json:"username"`
+		Password   string `json:"password"`
+		Port       any    `json:"port"`
+		SecretPath string `json:"secret_path"`
+	}
+	if err := decodeJSON(request, &payload); err != nil {
+		writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": "请求参数无效"})
+		return
+	}
+	var reauthRequired, portChanged, restartNeeded bool
+	err := a.Store.MutateUI(func(ui *store.UIConfig, _ store.RuntimeState) error {
+		username := strings.TrimSpace(payload.Username)
+		if username == "" || strings.TrimSpace(payload.Password) == "" && ui.Password == "" {
+			return errors.New("用户名不能为空；首次设置时密码不能为空")
+		}
+		port := ui.Port
+		if payload.Port != nil {
+			var ok bool
+			port, ok = numberFromJSON(payload.Port)
+			if !ok || port < 1 || port > 65535 {
+				return errors.New("网页管理端口范围必须是 1 至 65535")
+			}
+		}
+		secretPath := strings.TrimSpace(payload.SecretPath)
+		if secretPath == "" {
+			secretPath = ui.SecretPath
+		}
+		if !regexp.MustCompile(`^[A-Za-z0-9]+$`).MatchString(secretPath) {
+			return errors.New("安全后缀仅能由英文字母和数字组成")
+		}
+		oldUsername, oldPassword, oldPort, oldPath := ui.Username, ui.Password, ui.Port, ui.SecretPath
+		ui.Username, ui.Port, ui.SecretPath = username, port, secretPath
+		if strings.TrimSpace(payload.Password) != "" {
+			ui.Password = strings.TrimSpace(payload.Password)
+		}
+		reauthRequired = oldUsername != ui.Username || oldPassword != ui.Password
+		portChanged = oldPort != ui.Port
+		restartNeeded = portChanged || oldPath != ui.SecretPath
+		return nil
+	})
+	if err != nil {
+		writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	if err := a.Store.SaveUI(); err != nil {
+		writeOperationResult(writer, "", err)
+		return
+	}
+	if reauthRequired {
+		a.sessionsMu.Lock()
+		a.sessions = map[string]time.Time{}
+		a.sessionsMu.Unlock()
+	}
+	message := "账号密码配置更新成功，已即时生效！"
+	if restartNeeded {
+		message = "配置更新成功，网页管理端口或路径已变更，将在 2 秒内重启..."
+		if portChanged {
+			a.scheduleWebRestart()
+		}
+	}
+	writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true, "restart_needed": restartNeeded, "reauth_required": reauthRequired, "message": message})
+}
+
+func (a *Application) updateSettings(writer http.ResponseWriter, request *http.Request) {
+	payload := map[string]any{}
+	if err := decodeJSON(request, &payload); err != nil {
+		writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	var webPortChanged, proxyPortChanged bool
+	var proxyPort int
+	err := a.Store.MutateUI(func(ui *store.UIConfig, state store.RuntimeState) error {
+		oldPort, oldProxyPort := ui.Port, ui.ProxyPort
+		if value, ok := payload["host"].(string); ok && strings.TrimSpace(value) != "" {
+			ui.Host = strings.TrimSpace(value)
+		}
+		if value, ok := numberFromJSON(payload["port"]); ok && value > 0 && value <= 65535 {
+			ui.Port = value
+		}
+		if raw, exists := payload["proxy_port"]; exists {
+			value, ok := numberFromJSON(raw)
+			if !ok || value < 1024 || value > 65535 {
+				return errors.New("代理出站端口范围必须是 1024 至 65535")
+			}
+			ui.ProxyPort = value
+		}
+		if raw, exists := payload["upstream_proxy"]; exists {
+			value, ok := raw.(string)
+			if !ok {
+				return errors.New("前置代理格式无效")
+			}
+			normalized, normalizeErr := store.NormalizeProxyURL(value)
+			if normalizeErr != nil {
+				return errors.New("前置代理格式无效: " + normalizeErr.Error())
+			}
+			ui.UpstreamProxy = normalized
+		}
+		if raw, exists := payload["speed_test_url"]; exists {
+			value, ok := raw.(string)
+			if !ok {
+				return errors.New("宽带测速网址格式无效")
+			}
+			normalized, normalizeErr := store.NormalizeSpeedTestURL(value)
+			if normalizeErr != nil {
+				return errors.New("宽带测速网址格式无效: " + normalizeErr.Error())
+			}
+			ui.SpeedTestURL = normalized
+		}
+		if ui.Port == ui.ProxyPort {
+			return errors.New("代理端口不能与网页端口相同")
+		}
+		if value, ok := payload["routing_mode"].(string); ok {
+			valid := value == "auto" || value == "fixed_country" || value == "fixed_region" || value == "fixed_ip" || value == "favorites"
+			if !valid {
+				return errors.New("无效的路由模式")
+			}
+			ui.RoutingMode = value
+		}
+		if value, ok := payload["force_country"].(string); ok {
+			ui.ForceCountry = strings.TrimSpace(value)
+		}
+		if value, ok := payload["fixed_node_id"].(string); ok {
+			ui.FixedNodeID = strings.TrimSpace(value)
+		}
+		if value, ok := payload["routing_ip_type"].(string); ok {
+			if value != "all" && value != "residential" && value != "hosting" {
+				return errors.New("无效的IP出站类型过滤")
+			}
+			ui.RoutingIPType = value
+		}
+		if value, ok := payload["connection_enabled"].(bool); ok {
+			ui.ConnectionEnabled = value
+		}
+		if value, ok := payload["fav_fail_fallback"].(bool); ok {
+			ui.FavoriteFallback = value
+		}
+		if ui.RoutingMode == "fixed_region" && ui.ForceCountry == "" {
+			return errors.New("启用固定地区前，请先选择一个要锁定的国家")
+		}
+		if ui.RoutingMode == "fixed_ip" && ui.FixedNodeID == "" {
+			ui.FixedNodeID = state.ActiveNodeID
+			if ui.FixedNodeID == "" {
+				return errors.New("启用固定 IP 前，请先连接一个要锁定的节点")
+			}
+		}
+		if ui.RoutingMode == "favorites" {
+			ui.FavoriteFallback = false
+		}
+		webPortChanged = oldPort != ui.Port
+		proxyPortChanged = oldProxyPort != ui.ProxyPort
+		proxyPort = ui.ProxyPort
+		return nil
+	})
+	if err != nil {
+		writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	if err := a.Store.SaveUI(); err != nil {
+		writeOperationResult(writer, "", err)
+		return
+	}
+	a.enforceRoutingSettings()
+	message := "配置更新成功，已即时生效！"
+	restartNeeded := webPortChanged || proxyPortChanged
+	if restartNeeded {
+		message = "配置更新成功，代理出站端口变更，将在 2 秒内重启..."
+		if webPortChanged {
+			a.scheduleWebRestart()
+		}
+		if proxyPortChanged && a.Proxy != nil {
+			a.Proxy.ScheduleRestart(proxyPort)
+		}
+	}
+	writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true, "restart_needed": restartNeeded, "message": message})
+}
+
+func (a *Application) scheduleWebRestart() {
+	if store.EnvBool("AIMILIVPN_NO_AUTO_RESTART", false) {
+		return
+	}
+	go func() {
+		time.Sleep(2 * time.Second)
+		a.Store.LogEvent("info", "System", "Web listener restarting after configuration change")
+		a.restartServer()
+	}()
+}
+
+func (a *Application) enforceRoutingSettings() {
+	ui, state, _ := a.Store.Snapshot()
+	if state.ActiveNodeID == "" {
+		return
+	}
+	candidate, found := a.Store.NodeByID(state.ActiveNodeID)
+	if !found || a.VPN.ValidateCandidate(candidate) != nil {
+		a.Store.LogEvent("warning", "Routing", "当前活动节点不符合更新后的路由规则，已断开")
+		a.VPN.Stop("路由规则已更新，当前节点不再符合规则")
+		if ui.ConnectionEnabled && ui.RoutingMode != "fixed_ip" {
+			go a.autoSwitch(0)
+		}
+	}
+}
+
+func numberFromJSON(value any) (int, bool) {
+	switch number := value.(type) {
+	case float64:
+		return int(number), true
+	case json.Number:
+		parsed, err := strconv.Atoi(number.String())
+		return parsed, err == nil
+	case string:
+		parsed, err := strconv.Atoi(number)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func (a *Application) testProxy(writer http.ResponseWriter) {
+	result := a.CheckProxyHealth()
+	a.updateProxyState(result)
+	writeJSONResponse(writer, http.StatusOK, result)
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func decodeJSON(request *http.Request, target any) error {
+	decoder := json.NewDecoder(io.LimitReader(request.Body, 256<<10))
+	decoder.UseNumber()
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("请求 JSON 无效: %w", err)
+	}
+	return nil
+}
+
+func writeOperationResult(writer http.ResponseWriter, message string, err error) {
+	if err != nil {
+		writeJSONResponse(writer, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true, "message": message})
+}
+
+func writeJSONResponse(writer http.ResponseWriter, status int, value any) {
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.WriteHeader(status)
+	_ = json.NewEncoder(writer).Encode(value)
+}
+
+func writeHTML(writer http.ResponseWriter, value string) {
+	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-store")
+	_, _ = io.WriteString(writer, value)
+}
