@@ -63,13 +63,13 @@ func (controller *vpnController) commandFor(candidate node, configPath, device s
 	authPath := filepath.Join(controller.application.config.DataDir, "vpngate_auth.txt")
 	arguments := append(parts[1:],
 		"--config", configPath,
-		"--dev", device, "--dev-type", "tun",
 		"--pull-filter", "ignore", "route-ipv6",
 		"--pull-filter", "ignore", "ifconfig-ipv6",
 		"--route-delay", "2", "--connect-retry-max", "1",
 		"--connect-timeout", "15", "--auth-user-pass", authPath,
 		"--auth-nocache", "--verb", "3",
 	)
+	arguments = append(arguments, openVPNDeviceArguments(device, controller.openVPNVersion())...)
 	if routeNopull {
 		arguments = append(arguments, "--route-nopull")
 	}
@@ -230,6 +230,7 @@ func (controller *vpnController) runUntilReady(candidate node, device string, ti
 		return nil, err
 	}
 	command.Stderr = command.Stdout
+	preparePolicyRouting()
 	if err := command.Start(); err != nil {
 		return nil, fmt.Errorf("OpenVPN 启动失败: %w", err)
 	}

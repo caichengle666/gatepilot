@@ -15,11 +15,13 @@ func main() {
 	}
 	vpn := newVPNController(application)
 	web := newWebApplication(application, vpn)
+	proxy := newProxyServer(application.config)
+	web.proxy = proxy
 	ui, _, _ := application.snapshot()
 	log.Printf("管理地址: http://127.0.0.1:%d/%s/", ui.Port, ui.SecretPath)
 	log.Printf("初始账号: %s  密码: %s", ui.Username, ui.Password)
 	go func() {
-		if err := newProxyServer(application.config).serve(); err != nil {
+		if err := proxy.serve(); err != nil {
 			log.Printf("本地代理服务停止: %v", err)
 		}
 	}()

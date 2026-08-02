@@ -11,7 +11,7 @@ VPNGate API
     ↓ 获取并解析 OpenVPN 配置
 节点筛选 / OpenVPN 握手检测 / 自动维护
     ↓
-OpenVPN 进程 → tun0
+OpenVPN 进程 → Linux tun0 / Windows Wintun 或 TAP
     ↓
 127.0.0.1:7928 HTTP/SOCKS5 代理
     ↓
@@ -25,7 +25,7 @@ OpenVPN 进程 → tun0
 - 支持自动、固定国家、固定节点和收藏优先筛选。
 - 启动并监控外部 OpenVPN 进程。
 - 清理远端配置中的脚本、插件和管理接口等危险指令。
-- 在 Linux 上把代理连接绑定到 `tun0`，避免流量绕过 VPN。
+- 在 Linux 上绑定 `tun0`，在 Windows 上自动识别 OpenVPN 网卡并绑定代理出站，避免流量绕过 VPN。
 - 同一端口提供 HTTP、HTTPS CONNECT 和 SOCKS5 代理。
 - 支持可选的 HTTP Basic / SOCKS5 用户名密码认证。
 - 提供登录保护的 Web 页面和 JSON API。
@@ -33,11 +33,28 @@ OpenVPN 进程 → tun0
 
 ## 系统要求
 
-- 推荐 Linux VPS，并具有 root 权限和可用的 TUN/TAP 设备。
+- Linux 需要 root 权限和可用的 TUN/TAP 设备；Windows 需要以管理员身份运行。
 - Go 1.18 或更高版本。
-- OpenVPN、`iproute2` 和 CA 证书。
+- OpenVPN；Linux 还需要 `iproute2` 和 CA 证书。
 
-Windows 可以启动 Web 页面并用于开发测试，但 Linux 的 `tun0` 绑定和策略路由才是正式代理出口模式。
+Windows 原生模式支持 OpenVPN 2.4 及以上版本。GatePilot 会自动查找 `C:\Program Files\OpenVPN\bin\openvpn.exe`；OpenVPN 2.5 及以上优先使用 Wintun，并把本地 HTTP/SOCKS5 代理的 TCP 和 DNS 出站绑定到该虚拟网卡。
+
+## Windows 运行
+
+1. 从 OpenVPN 官方安装包安装 OpenVPN Community，安装时保留虚拟网卡驱动。
+2. 从 GitHub Actions 下载 `gatepilot-windows-amd64.exe`。
+3. 右键选择“以管理员身份运行”。
+4. 从终端输出打开管理地址，并在页面连接节点。
+5. 将需要走 VPN 的应用代理设置为 `127.0.0.1:7928`，协议使用 HTTP 或 SOCKS5。
+
+如果 OpenVPN 安装在其他目录，使用 PowerShell 指定：
+
+```powershell
+$env:OPENVPN_CMD='"D:\Tools\OpenVPN\bin\openvpn.exe"'
+.\gatepilot-windows-amd64.exe
+```
+
+GatePilot 不会修改 Windows 全局默认路由；只有使用 GatePilot 本地代理的应用流量会进入 OpenVPN，避免管理页面和 OpenVPN 控制连接被隧道自身截断。
 
 ## 一键安装
 
@@ -100,7 +117,7 @@ sudo ./gatepilot
 
 - Web 管理端口：`8787`
 - 本地 HTTP/SOCKS5 代理：`127.0.0.1:7928`
-- OpenVPN 虚拟网卡：`tun0`
+- OpenVPN 虚拟网卡：Linux 为 `tun0`；Windows 自动识别 Wintun/TAP
 
 ## 代理使用
 
@@ -132,11 +149,11 @@ export LOCAL_PROXY_PASS=your-strong-password
 | --- | --- | --- |
 | `VPNGATE_DATA_DIR` | 可执行文件旁的 `vpngate_data` | 数据目录 |
 | `VPNGATE_API_URL` | VPNGate 官方 API | 节点数据地址 |
-| `OPENVPN_CMD` | `openvpn` | OpenVPN 命令 |
+| `OPENVPN_CMD` | Linux 为 `openvpn`；Windows 自动查找 | OpenVPN 命令或完整路径 |
 | `LOCAL_PROXY_HOST` | `127.0.0.1` | 代理监听地址 |
 | `LOCAL_PROXY_PORT` | `7928` | 代理端口 |
 | `LOCAL_PROXY_MAX_CONNECTIONS` | `256` | 最大并发连接数 |
-| `LOCAL_PROXY_BIND_TUN` | `true` | Linux 上强制绑定 `tun0` |
+| `LOCAL_PROXY_BIND_TUN` | `true` | 强制把代理出站绑定到 Linux `tun0` 或 Windows OpenVPN 网卡 |
 | `LOCAL_PROXY_USER` | 空 | 代理认证用户名 |
 | `LOCAL_PROXY_PASS` | 空 | 代理认证密码 |
 | `UI_HOST` | `::` | Web 监听地址 |
@@ -162,7 +179,7 @@ vpngate_data/
 
 ## English
 
-GatePilot is a Go-based gateway for the public VPNGate relay network. It fetches VPNGate's OpenVPN profiles, launches the system OpenVPN client, and exposes a local HTTP/SOCKS5 proxy whose Linux outbound sockets are bound to `tun0`.
+GatePilot is a Go-based gateway for the public VPNGate relay network. It fetches VPNGate's OpenVPN profiles, launches the system OpenVPN client, and exposes a local HTTP/SOCKS5 proxy whose outbound sockets are bound to Linux `tun0` or the detected Windows OpenVPN adapter.
 
 VPNGate is a relay directory and volunteer network, not a separate VPN protocol. This project uses OpenVPN as its tunnel protocol.
 

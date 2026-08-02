@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,6 +26,8 @@ type proxyServer struct {
 	username   string
 	password   string
 	requireTun bool
+	mu         sync.Mutex
+	listener   net.Listener
 }
 
 func newProxyServer(config appConfig) *proxyServer {
@@ -44,14 +47,23 @@ func getenv(name string) string {
 }
 
 func (server *proxyServer) serve() error {
-	listener, err := net.Listen("tcp", net.JoinHostPort(server.host, strconv.Itoa(server.port)))
+	server.mu.Lock()
+	host, port := server.host, server.port
+	server.mu.Unlock()
+	listener, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
 		return err
 	}
+	server.mu.Lock()
+	server.listener = listener
+	server.mu.Unlock()
 	log.Printf("HTTP/SOCKS5 proxy listening on %s", listener.Addr())
 	for {
 		client, acceptErr := listener.Accept()
 		if acceptErr != nil {
+			if errors.Is(acceptErr, net.ErrClosed) {
+				return nil
+			}
 			return acceptErr
 		}
 		select {
@@ -64,6 +76,23 @@ func (server *proxyServer) serve() error {
 			_ = client.Close()
 		}
 	}
+}
+
+func (server *proxyServer) scheduleRestart(port int) {
+	go func() {
+		time.Sleep(2 * time.Second)
+		server.mu.Lock()
+		listener := server.listener
+		server.listener = nil
+		server.port = port
+		server.mu.Unlock()
+		if listener != nil {
+			_ = listener.Close()
+		}
+		if err := server.serve(); err != nil {
+			log.Printf("Local proxy restart failed: %v", err)
+		}
+	}()
 }
 
 func (server *proxyServer) handle(client net.Conn) {

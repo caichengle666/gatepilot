@@ -20,7 +20,7 @@ func TestWebLoginAndAPIs(t *testing.T) {
 		t.Fatal(err)
 	}
 	application.mu.Lock()
-	application.ui.SecretPath = "test-secret"
+	application.ui.SecretPath = "testsecret"
 	application.ui.Username = "test-user"
 	application.ui.Password = "test-password"
 	application.nodes = []node{{ID: "JP_test", Country: "日本", CountryShort: "JP", ConfigText: "client\nremote 127.0.0.1 1194\n"}}
@@ -34,7 +34,7 @@ func TestWebLoginAndAPIs(t *testing.T) {
 	}
 	client := &http.Client{Jar: jar}
 	loginBody, _ := json.Marshal(map[string]string{"username": "test-user", "password": "test-password"})
-	response, err := client.Post(server.URL+"/test-secret/api/login", "application/json", bytes.NewReader(loginBody))
+	response, err := client.Post(server.URL+"/testsecret/api/login", "application/json", bytes.NewReader(loginBody))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestWebLoginAndAPIs(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("login returned %s", response.Status)
 	}
-	response, err = client.Get(server.URL + "/test-secret/api/nodes")
+	response, err = client.Get(server.URL + "/testsecret/api/nodes")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestWebLoginAndAPIs(t *testing.T) {
 		t.Fatal("nodes API exposed OpenVPN configuration")
 	}
 
-	response, err = client.Get(server.URL + "/test-secret/")
+	response, err = client.Get(server.URL + "/testsecret/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestWebLoginAndAPIs(t *testing.T) {
 		t.Fatalf("unexpected management page: status=%s", response.Status)
 	}
 
-	response, err = client.Get(server.URL + "/test-secret/api/gateway_status")
+	response, err = client.Get(server.URL + "/testsecret/api/gateway_status")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestWebLoginAndAPIs(t *testing.T) {
 		t.Fatalf("unexpected gateway response: status=%s payload=%+v", response.Status, gateway)
 	}
 
-	response, err = client.Get(server.URL + "/test-secret/configs/JP_test.ovpn")
+	response, err = client.Get(server.URL + "/testsecret/configs/JP_test.ovpn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,5 +102,63 @@ func TestWebLoginAndAPIs(t *testing.T) {
 	}
 	if response.StatusCode != http.StatusOK || string(profile) != "client\nremote 127.0.0.1 1194\n" {
 		t.Fatalf("unexpected config download: status=%s body=%q", response.Status, profile)
+	}
+}
+
+func TestCredentialUpdateKeepsServerAvailable(t *testing.T) {
+	config := loadAppConfig()
+	config.DataDir = t.TempDir()
+	config.DisableBackground = true
+	application, err := newStore(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	application.mu.Lock()
+	application.ui.SecretPath = "testsecret"
+	application.ui.Username = "test-user"
+	application.ui.Password = "old-password"
+	application.mu.Unlock()
+	server := httptest.NewServer(newWebApplication(application, newVPNController(application)))
+	defer server.Close()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar}
+	loginBody, _ := json.Marshal(map[string]string{"username": "test-user", "password": "old-password"})
+	response, err := client.Post(server.URL+"/testsecret/api/login", "application/json", bytes.NewReader(loginBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	updateBody, _ := json.Marshal(map[string]any{
+		"username": "test-user", "password": "new-password", "port": application.ui.Port, "secret_path": "testsecret",
+	})
+	response, err = client.Post(server.URL+"/testsecret/api/update_credentials", "application/json", bytes.NewReader(updateBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var updateResult struct {
+		OK             bool   `json:"ok"`
+		RestartNeeded  bool   `json:"restart_needed"`
+		ReauthRequired bool   `json:"reauth_required"`
+		Error          string `json:"error"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&updateResult); err != nil {
+		_ = response.Body.Close()
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || !updateResult.OK || updateResult.RestartNeeded || !updateResult.ReauthRequired {
+		t.Fatalf("unexpected credential update response: status=%s payload=%+v", response.Status, updateResult)
+	}
+	loginBody, _ = json.Marshal(map[string]string{"username": "test-user", "password": "new-password"})
+	response, err = client.Post(server.URL+"/testsecret/api/login", "application/json", bytes.NewReader(loginBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("new credentials login returned %s", response.Status)
 	}
 }

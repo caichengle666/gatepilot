@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -21,7 +20,10 @@ import (
 type webApplication struct {
 	store      *store
 	vpn        *vpnController
+	proxy      *proxyServer
 	startedAt  time.Time
+	server     *http.Server
+	serverMu   sync.Mutex
 	sessionsMu sync.Mutex
 	sessions   map[string]time.Time
 	operations sync.Mutex
@@ -32,10 +34,28 @@ func newWebApplication(application *store, vpn *vpnController) *webApplication {
 }
 
 func (application *webApplication) serve() error {
-	ui, _, _ := application.store.snapshot()
-	address := net.JoinHostPort(ui.Host, strconv.Itoa(ui.Port))
-	server := &http.Server{Addr: address, Handler: application, ReadHeaderTimeout: 10 * time.Second}
-	return server.ListenAndServe()
+	for {
+		ui, _, _ := application.store.snapshot()
+		address := net.JoinHostPort(ui.Host, strconv.Itoa(ui.Port))
+		server := &http.Server{Addr: address, Handler: application, ReadHeaderTimeout: 10 * time.Second}
+		application.serverMu.Lock()
+		application.server = server
+		application.serverMu.Unlock()
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+func (application *webApplication) restartServer() {
+	application.serverMu.Lock()
+	server := application.server
+	application.serverMu.Unlock()
+	if server == nil {
+		return
+	}
+	go server.Shutdown(context.Background())
 }
 
 func (application *webApplication) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -437,7 +457,8 @@ func (application *webApplication) updateCredentials(writer http.ResponseWriter,
 		ui.Password = strings.TrimSpace(payload.Password)
 	}
 	reauthRequired := oldUsername != ui.Username || oldPassword != ui.Password
-	restartNeeded := oldPort != ui.Port || oldPath != ui.SecretPath
+	portChanged := oldPort != ui.Port
+	restartNeeded := portChanged || oldPath != ui.SecretPath
 	application.store.mu.Unlock()
 	if err := application.store.saveUI(); err != nil {
 		writeOperationResult(writer, "", err)
@@ -451,7 +472,9 @@ func (application *webApplication) updateCredentials(writer http.ResponseWriter,
 	message := "账号密码配置更新成功，已即时生效！"
 	if restartNeeded {
 		message = "配置更新成功，网页管理端口或路径已变更，将在 2 秒内重启..."
-		application.scheduleRestart()
+		if portChanged {
+			application.scheduleWebRestart()
+		}
 	}
 	writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true, "restart_needed": restartNeeded, "reauth_required": reauthRequired, "message": message})
 }
@@ -530,7 +553,10 @@ func (application *webApplication) updateSettings(writer http.ResponseWriter, re
 	if ui.RoutingMode == "favorites" {
 		ui.FavoriteFallback = false
 	}
-	restartNeeded := oldPort != ui.Port || oldProxyPort != ui.ProxyPort
+	webPortChanged := oldPort != ui.Port
+	proxyPortChanged := oldProxyPort != ui.ProxyPort
+	restartNeeded := webPortChanged || proxyPortChanged
+	proxyPort := ui.ProxyPort
 	application.store.mu.Unlock()
 	if err := application.store.saveUI(); err != nil {
 		writeOperationResult(writer, "", err)
@@ -540,19 +566,24 @@ func (application *webApplication) updateSettings(writer http.ResponseWriter, re
 	message := "配置更新成功，已即时生效！"
 	if restartNeeded {
 		message = "配置更新成功，代理出站端口变更，将在 2 秒内重启..."
-		application.scheduleRestart()
+		if webPortChanged {
+			application.scheduleWebRestart()
+		}
+		if proxyPortChanged && application.proxy != nil {
+			application.proxy.scheduleRestart(proxyPort)
+		}
 	}
 	writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true, "restart_needed": restartNeeded, "message": message})
 }
 
-func (application *webApplication) scheduleRestart() {
-	if application.store.config.DisableBackground || envBool("AIMILIVPN_NO_AUTO_RESTART", false) {
+func (application *webApplication) scheduleWebRestart() {
+	if envBool("AIMILIVPN_NO_AUTO_RESTART", false) {
 		return
 	}
 	go func() {
 		time.Sleep(2 * time.Second)
-		application.store.logEvent("info", "System", "配置变更，进程退出以触发服务重启")
-		os.Exit(0)
+		application.store.logEvent("info", "System", "Web listener restarting after configuration change")
+		application.restartServer()
 	}()
 }
 

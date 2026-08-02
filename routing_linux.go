@@ -30,6 +30,8 @@ func setupPolicyRouting(device string) {
 	log.Printf("[ERR_ROUTE_TABLE_ADD_FAILED] 无法为 %s 配置策略路由表 100", device)
 }
 
+func preparePolicyRouting() {}
+
 func cleanupPolicyRouting() {
 	_ = exec.Command("ip", "rule", "del", "table", "100").Run()
 	_ = exec.Command("ip", "route", "flush", "table", "100").Run()

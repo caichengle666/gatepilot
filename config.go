@@ -135,7 +135,7 @@ func loadAppConfig() appConfig {
 	return appConfig{
 		APIURL:              envString("VPNGATE_API_URL", defaultAPIURL),
 		DataDir:             root,
-		OpenVPNCommand:      envString("OPENVPN_CMD", "openvpn"),
+		OpenVPNCommand:      envString("OPENVPN_CMD", defaultOpenVPNCommand()),
 		OpenVPNUser:         envString("OPENVPN_AUTH_USER", "vpn"),
 		OpenVPNPassword:     envString("OPENVPN_AUTH_PASS", "vpn"),
 		ProxyHost:           envString("LOCAL_PROXY_HOST", "127.0.0.1"),
