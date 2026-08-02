@@ -125,6 +125,8 @@ jobs:
       - uses: actions/download-artifact@v6
         with:
           path: artifacts
+          pattern: gatepilot-*
+          merge-multiple: false
       - name: Prepare release assets
         shell: bash
         run: |
