@@ -24,16 +24,19 @@ const (
 	RuleDomain  RuleKind = iota // 域名后缀匹配
 	RuleKeyword                 // 域名关键词包含
 	RuleCIDR                    // IP/CIDR 匹配
+	RuleGeoSite                 // geosite:cn 域名分类库
+	RuleGeoIP                   // geoip:cn IP 分类库
 )
 
 // RouteRule 是一条分流规则。
 type RouteRule struct {
-	Kind    RuleKind    `json:"kind"`
-	Value   string      `json:"value"`
-	Action  RouteAction `json:"action"`
-	domain  string
-	keyword string
-	cidr    netip.Prefix
+	Kind       RuleKind    `json:"kind"`
+	Value      string      `json:"value"`
+	Action     RouteAction `json:"action"`
+	domain     string
+	keyword    string
+	cidr       netip.Prefix
+	geoCategory string
 }
 
 // RoutingEngine 是线程安全的分流规则引擎。
@@ -87,6 +90,10 @@ func parseRules(rules []RouteRule) []RouteRule {
 				}
 				rule.cidr = prefix
 			}
+		case RuleGeoSite:
+			rule.geoCategory = strings.ToLower(strings.TrimPrefix(strings.ToLower(rule.Value), "geosite:"))
+		case RuleGeoIP:
+			rule.geoCategory = strings.ToLower(strings.TrimPrefix(strings.ToLower(rule.Value), "geoip:"))
 		default:
 			continue
 		}
@@ -130,46 +137,47 @@ func Route(host string) RouteAction {
 			if rule.cidr.Contains(addr.Unmap()) {
 				return rule.Action
 			}
+		case RuleGeoSite:
+			if ip != nil {
+				continue
+			}
+			matcher := getGeoSiteMatcher(rule.geoCategory)
+			if matcher != nil && matcher.Match(host) {
+				return rule.Action
+			}
+		case RuleGeoIP:
+			if ip == nil {
+				continue
+			}
+			addr, ok := netip.AddrFromSlice(ip)
+			if !ok {
+				continue
+			}
+			matcher := getGeoIPMatcher(rule.geoCategory)
+			if matcher != nil && matcher.Contains(addr.Unmap()) {
+				return rule.Action
+			}
 		}
 	}
 	return engine.defaultAct
 }
 
-// DefaultChinaDirectRules 返回内置的中国直连规则预设。
-func DefaultChinaDirectRules() []RouteRule {
-	domains := []string{
-		"cn", "baidu.com", "qq.com", "taobao.com", "tmall.com", "jd.com",
-		"alipay.com", "aliyun.com", "alicdn.com", "163.com", "126.com",
-		"sina.com.cn", "weibo.com", "bilibili.com", "zhihu.com",
-		"douyin.com", "bytedance.com", "ixigua.com",
-		"meituan.com", "dianping.com", "xiaomi.com", "huawei.com",
-		"honor.com", "oppo.com", "vivo.com", "lenovo.com",
-		"csdn.net", "jianshu.com", "gitee.com", "oschina.net",
-		"cnblogs.com", "segmentfault.com", "51cto.com",
-		"iqiyi.com", "youku.com", "sohu.com", "ifeng.com",
-		"huya.com", "douyu.com", "kuaishou.com",
-		"cctv.com", "people.com.cn", "xinhuanet.com",
-		"12306.cn", "ctrip.com", "qunar.com", "ele.me",
-		"suning.com", "pinduoduo.com", "vip.com",
-		"dingtalk.com", "feishu.cn", "wps.cn", "youdao.com",
-		"netease.com", "tencent.com",
-		"myqcloud.com", "qcloud.com", "gtimg.com",
-		"amap.com", "autonavi.com",
+// DefaultGeoRules 返回基于 geoip/geosite 数据文件的默认中国直连规则。
+func DefaultGeoRules() []RouteRule {
+	return []RouteRule{
+		{Kind: RuleGeoSite, Value: "geosite:cn", Action: RouteDirect},
+		{Kind: RuleGeoIP, Value: "geoip:cn", Action: RouteDirect},
+		{Kind: RuleGeoSite, Value: "geosite:private", Action: RouteDirect},
+		{Kind: RuleGeoIP, Value: "geoip:private", Action: RouteDirect},
+		{Kind: RuleCIDR, Value: "10.0.0.0/8", Action: RouteDirect},
+		{Kind: RuleCIDR, Value: "172.16.0.0/12", Action: RouteDirect},
+		{Kind: RuleCIDR, Value: "192.168.0.0/16", Action: RouteDirect},
+		{Kind: RuleCIDR, Value: "127.0.0.0/8", Action: RouteDirect},
+		{Kind: RuleCIDR, Value: "169.254.0.0/16", Action: RouteDirect},
+		{Kind: RuleCIDR, Value: "100.64.0.0/10", Action: RouteDirect},
+		{Kind: RuleCIDR, Value: "fc00::/7", Action: RouteDirect},
+		{Kind: RuleCIDR, Value: "fe80::/10", Action: RouteDirect},
 	}
-	cidrs := []string{
-		"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
-		"127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10",
-		"224.0.0.0/4", "0.0.0.0/8",
-		"fc00::/7", "fe80::/10", "::1/128",
-	}
-	rules := make([]RouteRule, 0, len(domains)+len(cidrs))
-	for _, domain := range domains {
-		rules = append(rules, RouteRule{Kind: RuleDomain, Value: domain, Action: RouteDirect})
-	}
-	for _, cidr := range cidrs {
-		rules = append(rules, RouteRule{Kind: RuleCIDR, Value: cidr, Action: RouteDirect})
-	}
-	return rules
 }
 
 var directDialerOnce sync.Once

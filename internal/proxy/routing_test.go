@@ -95,25 +95,26 @@ func TestRouteEmptyRules(t *testing.T) {
 	}
 }
 
-func TestDefaultChinaDirectRules(t *testing.T) {
-	rules := DefaultChinaDirectRules()
+func TestDefaultGeoRules(t *testing.T) {
+	rules := DefaultGeoRules()
 	if len(rules) == 0 {
 		t.Fatal("expected non-empty preset rules")
 	}
 	InitRouting(rules, RouteVPN)
 	defer InitRouting(nil, RouteVPN)
 
-	if Route("www.baidu.com") != RouteDirect {
-		t.Error("baidu.com should be direct in China presets")
-	}
+	// CIDR rules work without geo data files
 	if Route("192.168.1.1") != RouteDirect {
-		t.Error("private IP should be direct in China presets")
+		t.Error("private IP should be direct")
 	}
-	if Route("www.google.com") != RouteVPN {
-		t.Error("google.com should go through VPN")
+	if Route("10.0.0.1") != RouteDirect {
+		t.Error("10.x should be direct")
 	}
+	if Route("8.8.8.8") != RouteVPN {
+		t.Error("public IP should go through VPN")
+	}
+	// geosite/geoip rules require data files; skip domain checks in unit test
 }
-
 func TestFailoverTracker(t *testing.T) {
 	triggered := make(chan int, 1)
 	tracker := NewFailoverTracker(3, time.Millisecond, func(failures int) {

@@ -80,3 +80,6 @@ scratch/
 .DS_Store
 Thumbs.db
 Desktop.ini
+geoip.dat
+geosite.dat
+*.dat.tmp

@@ -1,0 +1,227 @@
+package proxy
+
+import (
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+)
+
+var geoUpgradeMirrors = map[string][]string{
+	"geoip": {
+		"https://ghfast.top/https://github.com/v2fly/geoip/releases/latest/download/geoip.dat",
+		"https://github.com/v2fly/geoip/releases/latest/download/geoip.dat",
+	},
+	"geosite": {
+		"https://ghfast.top/https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat",
+		"https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat",
+	},
+}
+
+// GeoStatus 返回 geo 数据文件状态。
+func GeoStatus() map[string]string {
+	result := map[string]string{}
+	for _, kind := range []string{"geoip", "geosite"} {
+		path := GeoFilePath(kind)
+		info, err := os.Stat(path)
+		if err != nil || info.Size() < 1000 {
+			result[kind] = "未加载"
+			continue
+		}
+		if kind == "geoip" {
+			m := getGeoIPMatcher("cn")
+			if m != nil {
+				m.mu.RLock()
+				result[kind] = fmt.Sprintf("%d cidr", len(m.cidrs))
+				m.mu.RUnlock()
+			} else {
+				result[kind] = fmt.Sprintf("%d KB", info.Size()/1024)
+			}
+		} else {
+			m := getGeoSiteMatcher("cn")
+			if m != nil {
+				m.mu.RLock()
+				result[kind] = fmt.Sprintf("%d domains", len(m.suffixes)+len(m.domains)+len(m.keywords)+len(m.regexps))
+				m.mu.RUnlock()
+			} else {
+				result[kind] = fmt.Sprintf("%d KB", info.Size()/1024)
+			}
+		}
+	}
+	return result
+}
+
+// GeoFilePath 返回 geo 数据文件的完整路径。
+func GeoFilePath(kind string) string {
+	executable, _ := os.Executable()
+	dir := filepath.Dir(executable)
+	return filepath.Join(dir, kind+".dat")
+}
+
+// EnsureGeoFiles 启动时检查 geo 文件，缺失则自动下载。
+func EnsureGeoFiles() {
+	SetGeoIPPath(GeoFilePath("geoip"))
+	SetGeoSitePath(GeoFilePath("geosite"))
+	for _, kind := range []string{"geoip", "geosite"} {
+		path := GeoFilePath(kind)
+		if info, err := os.Stat(path); err == nil && info.Size() >= 1000 {
+			continue
+		}
+		log.Printf("[Geo] 本地缺少 %s.dat，开始自动下载...", kind)
+		ok := false
+		for _, url := range geoUpgradeMirrors[kind] {
+			if err := downloadGeoFile(url, path); err != nil {
+				log.Printf("[Geo] 自动下载失败 %s: %v", url, err)
+				continue
+			}
+			log.Printf("[Geo] 自动下载完成: %s", path)
+			ok = true
+			break
+		}
+		if !ok {
+			log.Printf("[Geo] 自动下载失败，分流规则中 geosite/geoip 将不可用: %s", path)
+		}
+	}
+	LoadGeoIP()
+	LoadGeoSite()
+}
+
+// UpgradeGeoFiles 在线升级 geoip.dat 和 geosite.dat。
+func UpgradeGeoFiles() map[string]string {
+	results := make(map[string]string)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for kind, mirrors := range geoUpgradeMirrors {
+		wg.Add(1)
+		go func(k string, ms []string) {
+			defer wg.Done()
+			path := GeoFilePath(k)
+			for _, url := range ms {
+				if err := downloadGeoFile(url, path); err == nil {
+					mu.Lock()
+					results[k] = "updated"
+					mu.Unlock()
+					return
+				}
+			}
+			mu.Lock()
+			results[k] = "all mirrors failed"
+			mu.Unlock()
+		}(kind, mirrors)
+	}
+	wg.Wait()
+	allOK := true
+	for _, v := range results {
+		if v != "updated" {
+			allOK = false
+		}
+	}
+	if allOK {
+		ResetGeoIPCache()
+		ResetGeoSiteCache()
+		LoadGeoIP()
+		LoadGeoSite()
+		log.Printf("[Geo] upgraded and reloaded")
+	}
+	return results
+}
+
+func downloadGeoFile(url, path string) error {
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	tmpName := path + ".tmp"
+	f, err := os.Create(tmpName)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	n, err := io.Copy(f, resp.Body)
+	if err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if n < 1000 {
+		os.Remove(tmpName)
+		return fmt.Errorf("file too small (%d bytes)", n)
+	}
+	f.Close()
+	return os.Rename(tmpName, path)
+}
+
+// ReloadGeoData 重新加载 geo 数据文件。
+func ReloadGeoData() {
+	ResetGeoIPCache()
+	ResetGeoSiteCache()
+	LoadGeoIP()
+	LoadGeoSite()
+}
+
+// GeoIPMatcherCIDRCount 返回已加载的 geoip CIDR 数量（用于状态显示）。
+func GeoIPMatcherCIDRCount() int {
+	m := getGeoIPMatcher("cn")
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.cidrs)
+}
+
+// GeoSiteMatcherDomainCount 返回已加载的 geosite 域名数量。
+func GeoSiteMatcherDomainCount() int {
+	m := getGeoSiteMatcher("cn")
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.suffixes) + len(m.domains) + len(m.keywords) + len(m.regexps)
+}
+
+// SplitRuleKindToString 将 RuleKind 转为字符串。
+func SplitRuleKindToString(kind RuleKind) string {
+	switch kind {
+	case RuleDomain:
+		return "domain"
+	case RuleKeyword:
+		return "keyword"
+	case RuleCIDR:
+		return "cidr"
+	case RuleGeoSite:
+		return "geosite"
+	case RuleGeoIP:
+		return "geoip"
+	default:
+		return "unknown"
+	}
+}
+
+// StringToRuleKind 将字符串转为 RuleKind。
+func StringToRuleKind(s string) (RuleKind, bool) {
+	switch strings.ToLower(s) {
+	case "domain":
+		return RuleDomain, true
+	case "keyword":
+		return RuleKeyword, true
+	case "cidr":
+		return RuleCIDR, true
+	case "geosite":
+		return RuleGeoSite, true
+	case "geoip":
+		return RuleGeoIP, true
+	default:
+		return RuleDomain, false
+	}
+}

@@ -41,6 +41,10 @@ func convertSplitRulesWeb(rules []store.SplitRule) []proxy.RouteRule {
 			kind = proxy.RuleKeyword
 		case "cidr":
 			kind = proxy.RuleCIDR
+		case "geosite":
+			kind = proxy.RuleGeoSite
+		case "geoip":
+			kind = proxy.RuleGeoIP
 		default:
 			continue
 		}
@@ -56,7 +60,7 @@ func convertSplitRulesWeb(rules []store.SplitRule) []proxy.RouteRule {
 // getSplitRouting 返回当前分流配置。
 func (a *Application) getSplitRouting(writer http.ResponseWriter, _ *http.Request) {
 	ui, _, _ := a.Store.Snapshot()
-	presets := proxy.DefaultChinaDirectRules()
+	presets := proxy.DefaultGeoRules()
 	presetList := make([]map[string]any, 0, len(presets))
 	for _, rule := range presets {
 		kindStr := "domain"
@@ -74,6 +78,7 @@ func (a *Application) getSplitRouting(writer http.ResponseWriter, _ *http.Reques
 		"split_default":  ui.SplitDefault,
 		"split_rules":    ui.SplitRules,
 		"china_presets":  presetList,
+		"geo_status":     proxy.GeoStatus(),
 	})
 }
 
@@ -202,4 +207,32 @@ func (a *Application) checkIPv6Leak(ctx context.Context, proxyAddr string) map[s
 		result["details"] = "IPv6 出口: " + body + "（已通过 VPN）"
 	}
 	return result
+}
+
+// geoUpgrade 在线升级 geoip.dat 和 geosite.dat。
+func (a *Application) geoUpgrade(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writeJSONResponse(writer, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "仅支持 POST"})
+		return
+	}
+	results := proxy.UpgradeGeoFiles()
+	allOK := true
+	for _, v := range results {
+		if v != "updated" {
+			allOK = false
+		}
+	}
+	a.reloadSplitRouting()
+	writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": allOK, "results": results, "geo_status": proxy.GeoStatus()})
+}
+
+// geoReload 重新加载本地 geo 数据文件。
+func (a *Application) geoReload(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writeJSONResponse(writer, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "仅支持 POST"})
+		return
+	}
+	proxy.ReloadGeoData()
+	a.reloadSplitRouting()
+	writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true, "geo_status": proxy.GeoStatus()})
 }

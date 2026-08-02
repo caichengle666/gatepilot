@@ -429,6 +429,10 @@ func (a *Application) handlePOST(writer http.ResponseWriter, request *http.Reque
 		a.testProxy(writer)
 	case "/api/dns_leak_check":
 		a.dnsLeakCheck(writer, request)
+	case "/api/geo/upgrade":
+		a.geoUpgrade(writer, request)
+	case "/api/geo/reload":
+		a.geoReload(writer, request)
 	case "/api/speed_test":
 		a.speedTest(writer, request)
 	default:
