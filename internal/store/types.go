@@ -81,6 +81,9 @@ type UIConfig struct {
 	FixedNodeID       string   `json:"fixed_node_id"`
 	FavoriteNodeIDs   []string `json:"favorite_node_ids"`
 	FavoriteFallback  bool     `json:"fav_fail_fallback"`
+	SplitRouting      bool     `json:"split_routing"`
+	SplitRules        []SplitRule `json:"split_rules,omitempty"`
+	SplitDefault      string   `json:"split_default"`
 }
 
 // RuntimeState 是运行时状态，部分持久化。
@@ -133,4 +136,11 @@ type BlacklistEntry struct {
 	Reason   string `json:"reason"`
 	MarkedAt int64  `json:"marked_at"`
 	Until    int64  `json:"until"`
+}
+
+// SplitRule 是一条分流规则配置。
+type SplitRule struct {
+	Kind   string `json:"kind"`
+	Value  string `json:"value"`
+	Action string `json:"action"`
 }

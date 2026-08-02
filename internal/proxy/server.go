@@ -33,6 +33,7 @@ type Server struct {
 	listener   net.Listener
 	restart    *time.Timer
 	dialError  string
+	Failover   *FailoverTracker
 }
 
 // NewServer 创建代理服务器。
@@ -76,6 +77,28 @@ func (s *Server) setDialError(err error) {
 		s.dialError = err.Error()
 	}
 	s.mu.Unlock()
+}
+
+// dialTarget 根据分流规则决定走 VPN 还是直连，并记录故障统计。
+func (s *Server) dialTarget(address string) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+	var conn net.Conn
+	if Route(host) == RouteDirect {
+		conn, err = DialDirect(address)
+	} else {
+		conn, err = DialVPN(address, s.requireTun)
+	}
+	if s.Failover != nil {
+		if err != nil {
+			s.Failover.RecordFailure()
+		} else {
+			s.Failover.RecordSuccess()
+		}
+	}
+	return conn, err
 }
 
 // Serve 启动代理监听。
@@ -200,7 +223,7 @@ func (s *Server) handleSOCKS5(client net.Conn) {
 	if err != nil {
 		return
 	}
-	upstream, err := DialVPN(net.JoinHostPort(host, strconv.Itoa(int(binary.BigEndian.Uint16(portBytes)))), s.requireTun)
+	upstream, err := s.dialTarget(net.JoinHostPort(host, strconv.Itoa(int(binary.BigEndian.Uint16(portBytes)))))
 	if err != nil {
 		s.setDialError(err)
 		_, _ = client.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
@@ -287,7 +310,7 @@ func (s *Server) handleHTTP(client net.Conn, first byte) {
 		}
 		target = net.JoinHostPort(target, port)
 	}
-	upstream, err := DialVPN(target, s.requireTun)
+	upstream, err := s.dialTarget(target)
 	if err != nil {
 		s.setDialError(err)
 		writeProxyResponse(client, http.StatusBadGateway, "Bad Gateway")
@@ -326,7 +349,7 @@ func (s *Server) handleConnect(client net.Conn, authority string) {
 	if _, _, err := net.SplitHostPort(target); err != nil {
 		target = net.JoinHostPort(target, "443")
 	}
-	upstream, err := DialVPN(target, s.requireTun)
+	upstream, err := s.dialTarget(target)
 	if err != nil {
 		s.setDialError(err)
 		writeProxyResponse(client, http.StatusBadGateway, "Bad Gateway")

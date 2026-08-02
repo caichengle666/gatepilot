@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/caichengle666/gatepilot/internal/proxy"
 	"github.com/caichengle666/gatepilot/internal/store"
@@ -38,6 +39,11 @@ func main() {
 	}
 	proxyServer := proxy.NewServer(application.Config, ui)
 	webApp.Proxy = proxyServer
+	proxyServer.Failover = proxy.NewFailoverTracker(5, 30*time.Second, func(failures int) {
+		log.Printf("代理连续 %d 次出站失败，触发自动切换节点", failures)
+		webApp.TriggerAutoSwitch(failures)
+	})
+	initSplitRouting(application, ui)
 	if ok, message := store.OpenVPNStatus(application.Config.OpenVPNCommand); ok {
 		_ = application.UpdateState(func(state *store.RuntimeState) {
 			state.OpenVPNOK = true
@@ -73,4 +79,40 @@ func main() {
 	if err := webApp.Serve(); err != nil {
 		log.Fatalf("Web 管理服务停止: %v", err)
 	}
+}
+
+func initSplitRouting(application *store.Store, ui store.UIConfig) {
+	if !ui.SplitRouting {
+		return
+	}
+	rules := convertSplitRules(ui.SplitRules)
+	defaultAction := proxy.RouteVPN
+	if ui.SplitDefault == "direct" {
+		defaultAction = proxy.RouteDirect
+	}
+	proxy.InitRouting(rules, defaultAction)
+	log.Printf("分流规则已加载: %d 条规则, 默认 %s", len(rules), ui.SplitDefault)
+}
+
+func convertSplitRules(rules []store.SplitRule) []proxy.RouteRule {
+	result := make([]proxy.RouteRule, 0, len(rules))
+	for _, rule := range rules {
+		var kind proxy.RuleKind
+		switch rule.Kind {
+		case "domain":
+			kind = proxy.RuleDomain
+		case "keyword":
+			kind = proxy.RuleKeyword
+		case "cidr":
+			kind = proxy.RuleCIDR
+		default:
+			continue
+		}
+		action := proxy.RouteVPN
+		if rule.Action == "direct" {
+			action = proxy.RouteDirect
+		}
+		result = append(result, proxy.RouteRule{Kind: kind, Value: rule.Value, Action: action})
+	}
+	return result
 }

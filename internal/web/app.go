@@ -425,6 +425,8 @@ func (a *Application) handlePOST(writer http.ResponseWriter, request *http.Reque
 		a.updateSettings(writer, request)
 	case "/api/test_proxy":
 		a.testProxy(writer)
+	case "/api/dns_leak_check":
+		a.dnsLeakCheck(writer, request)
 	case "/api/speed_test":
 		a.speedTest(writer, request)
 	default:

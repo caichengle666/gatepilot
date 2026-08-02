@@ -60,6 +60,12 @@ func (a *Application) collectorLoop() {
 	}
 }
 
+// TriggerAutoSwitch 由代理故障追踪器调用，触发自动切换节点。
+func (a *Application) TriggerAutoSwitch(failures int) {
+	a.Store.LogEvent("warning", "Proxy", fmt.Sprintf("代理连续出站失败 %d 次，自动切换节点", failures))
+	a.autoSwitch(0)
+}
+
 func (a *Application) autoSwitch(attempt int) {
 	if attempt >= 3 {
 		a.Store.LogEvent("error", "VPN", "连续自动切换失败 3 次，等待后台重新获取节点")
