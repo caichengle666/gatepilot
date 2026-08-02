@@ -60,6 +60,8 @@ OpenVPN 2.6 及以上在 Windows 上默认使用 Wintun 驱动，并把本地 HT
 4. 从终端输出打开管理地址，并在页面连接节点。
 5. 将需要走 VPN 的应用代理设置为 `127.0.0.1:7928`，协议使用 HTTP 或 SOCKS5。
 
+Windows 默认只允许一个 GatePilot 实例运行。重复启动会在创建 OpenVPN 进程前退出；如果 Web 管理端口或本地代理端口已被其他程序占用，也会直接提示端口冲突，不会额外创建 Wintun 网卡。
+
 如果 OpenVPN 安装在其他目录，使用 PowerShell 指定：
 
 ```powershell

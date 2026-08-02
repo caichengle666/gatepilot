@@ -3,6 +3,7 @@
 package vpn
 
 import (
+	"net"
 	"reflect"
 	"testing"
 )
@@ -26,5 +27,36 @@ func TestOpenVPNDeviceArgumentsWindows(t *testing.T) {
 func TestWindowsNodeTestsAreSerial(t *testing.T) {
 	if got := NodeTestWorkerCount(5); got != 1 {
 		t.Fatalf("worker count = %d, want 1", got)
+	}
+}
+
+func TestWindowsRouteDeleteArgumentsAreScopedToInterface(t *testing.T) {
+	want := [][]string{
+		{"-4", "DELETE", "0.0.0.0", "MASK", "128.0.0.0", "IF", "5"},
+		{"-4", "DELETE", "128.0.0.0", "MASK", "128.0.0.0", "IF", "5"},
+	}
+	if got := windowsRouteDeleteArguments(5); !reflect.DeepEqual(got, want) {
+		t.Fatalf("route delete arguments = %v, want %v", got, want)
+	}
+	if got := windowsRouteDeleteArguments(0); got != nil {
+		t.Fatalf("invalid interface should not produce delete arguments: %v", got)
+	}
+}
+
+func TestBundledOpenVPNExecutableDetection(t *testing.T) {
+	if !isBundledOpenVPNExecutable(`C:\GatePilot\gatepilot.exe`, `C:\GatePilot\openvpn\openvpn.exe`) {
+		t.Fatal("portable OpenVPN core should be detected")
+	}
+	if isBundledOpenVPNExecutable(`C:\GatePilot\gatepilot.exe`, `C:\Program Files\OpenVPN\bin\openvpn.exe`) {
+		t.Fatal("system OpenVPN installation must not be treated as bundled")
+	}
+}
+
+func TestVPNGateIPv4Detection(t *testing.T) {
+	if !isVPNGateIPv4(net.ParseIP("10.211.1.25")) {
+		t.Fatal("VPNGate tunnel address should be detected")
+	}
+	if isVPNGateIPv4(net.ParseIP("192.168.2.11")) {
+		t.Fatal("physical LAN address must not be detected as VPNGate")
 	}
 }

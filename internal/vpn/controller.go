@@ -52,6 +52,7 @@ func (failure *openVPNFailure) Unwrap() error {
 
 // NewController 创建 VPN 控制器。
 func NewController(application *store.Store) *Controller {
+	cleanupStaleVPNState(application.Config.OpenVPNCommand)
 	return &Controller{application: application, testIndex: 10}
 }
 
@@ -264,6 +265,12 @@ func (c *Controller) prepareConfig(candidate store.Node, suffix string) (string,
 }
 
 func (c *Controller) runUntilReady(candidate store.Node, device string, timeout time.Duration, routeNopull bool) (*openVPNRun, error) {
+	ready := false
+	defer func() {
+		if !ready {
+			cleanupPolicyRouting()
+		}
+	}()
 	configPath, err := c.prepareConfig(candidate, "_"+device)
 	if err != nil {
 		return nil, err
@@ -317,6 +324,7 @@ func (c *Controller) runUntilReady(candidate store.Node, device string, timeout 
 			c.updateHandshakeStatus(line)
 			lower := strings.ToLower(line)
 			if strings.Contains(lower, "initialization sequence completed") {
+				ready = true
 				return &openVPNRun{command: command, done: done, tail: tail}, nil
 			}
 			if strings.Contains(lower, "auth_failed") || strings.Contains(lower, "fatal error") || strings.Contains(lower, "exiting due to fatal error") {
@@ -479,6 +487,7 @@ func (c *Controller) TestNode(nodeID string) (store.Node, error) {
 	case <-run.done:
 	case <-time.After(3 * time.Second):
 	}
+	cleanupPolicyRouting()
 	if latency <= 0 {
 		latency = time.Since(started).Milliseconds()
 	}

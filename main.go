@@ -14,10 +14,18 @@ import (
 
 func main() {
 	ensureAdminElevation()
+	releaseInstance, err := acquireInstanceLock()
+	if err != nil {
+		log.Fatalf("GatePilot 启动失败: %v", err)
+	}
+	defer releaseInstance()
 	config := store.LoadAppConfig()
 	application, err := store.New(config)
 	if err != nil {
 		log.Fatalf("初始化数据目录失败: %v", err)
+	}
+	if err := ensureStartupPortsAvailable(application.Config); err != nil {
+		log.Fatalf("GatePilot 启动失败: %v", err)
 	}
 	vpnCtrl := vpn.NewController(application)
 	webApp := web.NewApplication(application, vpnCtrl)
