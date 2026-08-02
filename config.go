@@ -242,6 +242,20 @@ func newStore(config appConfig) (*store, error) {
 	}
 	_ = readJSON(filepath.Join(config.DataDir, "state.json"), &application.state)
 	_ = readJSON(filepath.Join(config.DataDir, "nodes.json"), &application.nodes)
+	application.state.Status = "disconnected"
+	application.state.Message = "尚未连接 VPN"
+	application.state.ActiveNodeID = ""
+	application.state.ActiveOpenVPNNodeID = ""
+	application.state.ActiveNodeLatency = "无活动连接"
+	application.state.IsConnecting = false
+	application.state.MaintenanceRunning = false
+	application.state.ProxyOK = false
+	application.state.ProxyIP = "-"
+	application.state.ProxyLatencyMS = 0
+	application.state.ProxyError = ""
+	for index := range application.nodes {
+		application.nodes[index].Active = false
+	}
 	if err := application.saveUI(); err != nil {
 		return nil, err
 	}

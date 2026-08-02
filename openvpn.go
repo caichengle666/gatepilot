@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -257,7 +258,7 @@ func (controller *vpnController) runUntilReady(candidate node, device string, ti
 		select {
 		case line, open := <-lines:
 			if !open {
-				stopCommand(command)
+				stopCommandAndWait(command, done)
 				return nil, controller.openVPNError(errors.New("OpenVPN 输出已关闭"), tail)
 			}
 			tail = append(tail, line)
@@ -270,13 +271,13 @@ func (controller *vpnController) runUntilReady(candidate node, device string, ti
 				return &openVPNRun{command: command, done: done, tail: tail}, nil
 			}
 			if strings.Contains(lower, "auth_failed") || strings.Contains(lower, "fatal error") || strings.Contains(lower, "exiting due to fatal error") {
-				stopCommand(command)
+				stopCommandAndWait(command, done)
 				return nil, controller.openVPNError(errors.New(line), tail)
 			}
 		case waitErr := <-done:
 			return nil, controller.openVPNError(waitErr, tail)
 		case <-timer.C:
-			stopCommand(command)
+			stopCommandAndWait(command, done)
 			return nil, controller.openVPNError(errors.New("OpenVPN 连接超时"), tail)
 		}
 	}
@@ -422,10 +423,7 @@ func (controller *vpnController) testNodes(ids []string) []node {
 		ids = ids[:limit]
 	}
 	results := make([]node, len(ids))
-	workerCount := len(ids)
-	if workerCount > 5 {
-		workerCount = 5
-	}
+	workerCount := nodeTestWorkerCount(len(ids))
 	semaphore := make(chan struct{}, workerCount)
 	var waitGroup sync.WaitGroup
 	for index, id := range ids {
@@ -445,6 +443,16 @@ func (controller *vpnController) testNodes(ids []string) []node {
 		}
 	}
 	return completed
+}
+
+func nodeTestWorkerCount(total int) int {
+	if runtime.GOOS == "windows" && total > 1 {
+		return 1
+	}
+	if total > 5 {
+		return 5
+	}
+	return total
 }
 
 func (controller *vpnController) updateNodeProbe(id string, available bool, latency int64, message string) {
@@ -525,6 +533,14 @@ func stopCommand(command *exec.Cmd) {
 	_ = command.Process.Signal(os.Interrupt)
 	time.Sleep(250 * time.Millisecond)
 	_ = command.Process.Kill()
+}
+
+func stopCommandAndWait(command *exec.Cmd, done <-chan error) {
+	stopCommand(command)
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+	}
 }
 
 func (controller *vpnController) running() bool {
