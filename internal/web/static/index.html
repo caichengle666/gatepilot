@@ -1036,6 +1036,53 @@
 
         <div style="border-top: 1px dashed rgba(255,255,255,0.08); padding-top: 16px; margin-bottom: 16px;">
           <div class="form-group" style="margin-bottom: 16px;">
+            <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" id="net_split_routing" onchange="toggleSplitRoutingFields()" style="width: 16px; height: 16px; accent-color: var(--primary);">
+              启用域名 / IP 分流
+            </label>
+            <div style="font-size: 12px; color: var(--text-secondary); margin-top: 6px; line-height: 1.5;">命中规则的目标走直连或 VPN，未命中的走默认动作。适合国内网站直连、国外网站走 VPN。</div>
+
+            <div id="net_split_fields" style="display: none; margin-top: 14px;">
+              <div class="form-group" style="margin-bottom: 14px;">
+                <label class="form-label">未命中规则时的默认动作</label>
+                <input type="hidden" id="net_split_default" value="vpn">
+                <div class="option-group" id="split_default_group">
+                  <div class="option-card active" data-value="vpn" onclick="setSplitDefault('vpn')">
+                    <div class="option-card-title">默认走 VPN</div>
+                    <div class="option-card-desc">只有命中规则才直连</div>
+                  </div>
+                  <div class="option-card" data-value="direct" onclick="setSplitDefault('direct')">
+                    <div class="option-card-title">默认直连</div>
+                    <div class="option-card-desc">只有命中规则才走 VPN</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="form-group" style="margin-bottom: 14px;">
+                <label class="form-label">分流规则（从上到下依次匹配）</label>
+                <div id="net_split_rules_list" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px;"></div>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                  <button type="button" onclick="addSplitRuleRow('', '', 'direct')" style="height: 32px; padding: 0 12px; font-size: 12px; font-weight: 600; border-radius: 8px; border: 1px solid var(--border-color); background: rgba(255,255,255,0.03); color: var(--text-primary); cursor: pointer; transition: background 0.15s;" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='rgba(255,255,255,0.03)'">＋ 添加规则</button>
+                  <button type="button" onclick="applyChinaPresets()" style="height: 32px; padding: 0 12px; font-size: 12px; font-weight: 600; border-radius: 8px; border: 1px solid rgba(16,185,129,0.3); background: rgba(16,185,129,0.08); color: var(--success); cursor: pointer; transition: background 0.15s;" onmouseover="this.style.background='rgba(16,185,129,0.15)'" onmouseout="this.style.background='rgba(16,185,129,0.08)'">🇨🇳 应用中国直连预设</button>
+                  <button type="button" onclick="clearSplitRules()" style="height: 32px; padding: 0 12px; font-size: 12px; font-weight: 600; border-radius: 8px; border: 1px solid rgba(244,63,94,0.3); background: rgba(244,63,94,0.06); color: var(--danger); cursor: pointer; transition: background 0.15s;" onmouseover="this.style.background='rgba(244,63,94,0.12)'" onmouseout="this.style.background='rgba(244,63,94,0.06)'">清空规则</button>
+                </div>
+                <div style="font-size: 11px; color: var(--text-secondary); margin-top: 8px; line-height: 1.5;">类型：domain 域名后缀（baidu.com 匹配 www.baidu.com）· keyword 域名包含关键词 · cidr IP 或网段（192.168.0.0/16）</div>
+              </div>
+
+              <div class="form-group" style="margin-bottom: 0;">
+                <label class="form-label">DNS / IPv6 泄漏检测</label>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                  <button type="button" id="net_dns_leak_btn" onclick="runDNSLeakCheck()" style="height: 36px; padding: 0 14px; font-size: 13px; font-weight: 600; border-radius: 8px; border: 1px solid var(--border-color); background: rgba(255,255,255,0.03); color: var(--text-primary); cursor: pointer; white-space: nowrap; transition: background 0.15s;" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='rgba(255,255,255,0.03)'">开始检测</button>
+                  <div id="net_dns_leak_result" style="font-size: 12px; color: var(--text-secondary); line-height: 1.6;"></div>
+                </div>
+                <div style="font-size: 11px; color: var(--text-secondary); margin-top: 6px; line-height: 1.5;">检测 DNS 查询与 IPv6 流量是否绕过 VPN 隧道。需先连接 VPN。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style="border-top: 1px dashed rgba(255,255,255,0.08); padding-top: 16px; margin-bottom: 16px;">
+          <div class="form-group" style="margin-bottom: 16px;">
             <label class="form-label">IP 出站路由模式</label>
             <input type="hidden" id="net_routing_mode" value="auto">
             <div class="option-group" id="routing_mode_group">
@@ -2227,6 +2274,8 @@ function openNetworkModal() {
   toggleProxyAuthFields();
   
   populateRoutingCountries();
+  loadSplitRoutingState();
+ 
   $("network_modal").style.display = "flex";
   $("admin_dropdown").style.display = "none";
 }
@@ -2240,6 +2289,127 @@ function toggleProxyAuthFields() {
   $("net_proxy_auth_fields").style.display = enabled ? "grid" : "none";
   $("net_proxy_username").required = enabled;
   $("net_proxy_password").required = enabled && !(state && state.proxy_password_set);
+}
+
+function toggleSplitRoutingFields() {
+  const enabled = $("net_split_routing").checked;
+  $("net_split_fields").style.display = enabled ? "block" : "none";
+}
+
+function setSplitDefault(value) {
+  $("net_split_default").value = value;
+  selectOptionCard('split_default', value);
+}
+
+function splitRuleRowHTML(kind, value, action) {
+  const kindOptions = ['domain', 'keyword', 'cidr'].map(k =>
+    '<option value="' + k + '" ' + (k === kind ? 'selected' : '') + '>' + k + '</option>'
+  ).join('');
+  const actionOptions = ['direct', 'vpn'].map(a =>
+    '<option value="' + a + '" ' + (a === action ? 'selected' : '') + '>' + (a === 'direct' ? '直连' : '走 VPN') + '</option>'
+  ).join('');
+  const selStyle = 'background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); color: var(--text-primary); outline: none; cursor: pointer; height: 34px; border-radius: 8px; padding: 0 8px; font-size: 12px;';
+  return '<div class="split-rule-row" style="display: flex; gap: 8px; align-items: center;">'
+    + '<select class="split-rule-kind" style="' + selStyle + ' width: 92px; flex-shrink: 0;">' + kindOptions + '</select>'
+    + '<input type="text" class="split-rule-value input-field" value="' + (value || '').replace(/"/g, '&quot;') + '" placeholder="baidu.com / google / 10.0.0.0/8" style="flex: 1; height: 34px; font-size: 12px; padding: 0 10px;">'
+    + '<select class="split-rule-action" style="' + selStyle + ' width: 86px; flex-shrink: 0;">' + actionOptions + '</select>'
+    + '<button type="button" onclick="this.parentElement.remove()" style="width: 30px; height: 30px; flex-shrink: 0; border-radius: 8px; border: 1px solid rgba(244,63,94,0.25); background: transparent; color: var(--danger); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; transition: background 0.15s;" onmouseover="this.style.background=&#39;rgba(244,63,94,0.1)&#39;" onmouseout="this.style.background=&#39;transparent&#39;">✕</button>'
+    + '</div>';
+}
+
+function addSplitRuleRow(kind, value, action) {
+  const list = $("net_split_rules_list");
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = splitRuleRowHTML(kind || 'domain', value || '', action || 'direct');
+  list.appendChild(wrapper.firstElementChild);
+}
+
+function clearSplitRules() {
+  $("net_split_rules_list").innerHTML = "";
+}
+
+function collectSplitRules() {
+  const rules = [];
+  document.querySelectorAll('#net_split_rules_list .split-rule-row').forEach(row => {
+    const kind = row.querySelector('.split-rule-kind').value;
+    const value = row.querySelector('.split-rule-value').value.trim();
+    const action = row.querySelector('.split-rule-action').value;
+    if (value) rules.push({ kind, value, action });
+  });
+  return rules;
+}
+
+async function applyChinaPresets() {
+  try {
+    const res = await fetch("./api/split_routing");
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      $("network_error").textContent = data.error || "获取预设失败";
+      $("network_error").style.display = "block";
+      return;
+    }
+    clearSplitRules();
+    (data.china_presets || []).forEach(rule => addSplitRuleRow(rule.kind, rule.value, rule.action));
+    $("network_success").textContent = "已载入 " + (data.china_presets || []).length + " 条中国直连预设规则，点击「保存修改」生效。";
+    $("network_success").style.display = "block";
+  } catch (err) {
+    $("network_error").textContent = "获取预设失败，请重试";
+    $("network_error").style.display = "block";
+  }
+}
+
+async function loadSplitRoutingState() {
+  try {
+    const res = await fetch("./api/split_routing");
+    const data = await res.json();
+    if (!res.ok || !data.ok) return;
+    $("net_split_routing").checked = !!data.split_routing;
+    setSplitDefault(data.split_default === "direct" ? "direct" : "vpn");
+    clearSplitRules();
+    (data.split_rules || []).forEach(rule => addSplitRuleRow(rule.kind, rule.value, rule.action));
+    toggleSplitRoutingFields();
+  } catch (err) { /* ignore */ }
+}
+
+async function runDNSLeakCheck() {
+  const button = $("net_dns_leak_btn");
+  const resultEl = $("net_dns_leak_result");
+  const errorDivEl = $("network_error");
+  errorDivEl.style.display = "none";
+  button.disabled = true;
+  button.textContent = "检测中...";
+  resultEl.innerHTML = '<span style="color: var(--text-secondary);">正在通过 VPN 隧道检测，约需 10 秒...</span>';
+  try {
+    const res = await fetch("./api/dns_leak_check", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      resultEl.innerHTML = '<span style="color: var(--danger);">' + (data.error || "检测失败") + '</span>';
+      return;
+    }
+    let html = '';
+    if (data.exit_ip) {
+      html += '<div>🌐 出口 IP：<strong style="color: var(--text-primary);">' + data.exit_ip + '</strong></div>';
+    }
+    if (data.dns_leak) {
+      const dns = data.dns_leak;
+      const color = dns.leaked ? 'var(--danger)' : 'var(--success)';
+      html += '<div style="color:' + color + ';">🔒 ' + (dns.details || (dns.leaked ? '检测到 DNS 泄漏' : 'DNS 未泄漏')) + '</div>';
+      if (dns.dns_servers && dns.dns_servers.length) {
+        html += '<div style="color: var(--text-secondary);">DNS 服务器：' + dns.dns_servers.join('、') + '</div>';
+      }
+    }
+    if (data.ipv6_leak) {
+      const v6 = data.ipv6_leak;
+      const color = v6.leaked ? 'var(--danger)' : 'var(--success)';
+      html += '<div style="color:' + color + ';">🛡 ' + (v6.details || (v6.leaked ? 'IPv6 泄漏' : 'IPv6 未泄漏')) + '</div>';
+    }
+    resultEl.innerHTML = html || '<span style="color: var(--text-secondary);">检测完成，无更多信息。</span>';
+  } catch (err) {
+    resultEl.innerHTML = '<span style="color: var(--danger);">检测请求失败，请重试</span>';
+  } finally {
+    button.disabled = false;
+    button.textContent = "开始检测";
+  }
 }
 
 async function saveNetwork(e) {
@@ -2313,7 +2483,10 @@ async function saveNetwork(e) {
         speed_test_url: speedTestURL,
         routing_mode: routingMode,
         force_country: forceCountry,
-        routing_ip_type: routingIpType
+        routing_ip_type: routingIpType,
+        split_routing: $("net_split_routing").checked,
+        split_default: $("net_split_default").value,
+        split_rules: collectSplitRules()
       })
     });
     
