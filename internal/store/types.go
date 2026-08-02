@@ -109,6 +109,8 @@ type RuntimeState struct {
 	CollectorHeartbeat   int64  `json:"collector_heartbeat,omitempty"`
 	CheckerHeartbeat     int64  `json:"checker_heartbeat,omitempty"`
 	PingerHeartbeat      int64  `json:"pinger_heartbeat,omitempty"`
+	OpenVPNOK            bool   `json:"openvpn_ok"`
+	OpenVPNMessage       string `json:"openvpn_message,omitempty"`
 	UpdatedAt            string `json:"updated_at"`
 }
 

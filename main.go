@@ -23,6 +23,19 @@ func main() {
 	webApp := web.NewApplication(application, vpnCtrl)
 	proxyServer := proxy.NewServer(application.Config)
 	webApp.Proxy = proxyServer
+	if ok, message := store.OpenVPNStatus(application.Config.OpenVPNCommand); ok {
+		_ = application.UpdateState(func(state *store.RuntimeState) {
+			state.OpenVPNOK = true
+			state.OpenVPNMessage = ""
+		})
+		log.Printf("OpenVPN 核心检测正常: %s", application.Config.OpenVPNCommand)
+	} else {
+		_ = application.UpdateState(func(state *store.RuntimeState) {
+			state.OpenVPNOK = false
+			state.OpenVPNMessage = message
+		})
+		log.Printf("OpenVPN 核心不可用: %s", message)
+	}
 	ui, _, _ := application.Snapshot()
 	log.Printf("管理地址: http://127.0.0.1:%d/%s/", ui.Port, ui.SecretPath)
 	log.Printf("初始账号: %s  密码: %s", ui.Username, ui.Password)

@@ -834,6 +834,8 @@
 </header>
 <main>
   
+  <div id="openvpn_warning" style="display: none; margin-bottom: 16px; padding: 12px 14px; background: rgba(244, 63, 94, 0.1); border: 1px solid rgba(244, 63, 94, 0.3); border-radius: 10px; font-size: 13px; color: #fda4af; line-height: 1.5;"></div>
+
     <!-- 当前连接活动节点卡片 -->
     <section class="active-node-section" id="active_node_card" style="margin-bottom: 24px;">
       <!-- Rendered dynamically by render() -->
@@ -1460,6 +1462,17 @@ function render(){
   const localProxy = state.local_proxy || `http://127.0.0.1:${state.proxy_port || 7928}`;
   if ($("status")) { $("status").innerHTML=`<span class="status-dot"></span>HTTP 代理本地接口：${localProxy} | 活动节点：${activeNodeInfo} | 状态：${statusMessage}`; }
   
+  const openvpnWarning = $("openvpn_warning");
+  if (openvpnWarning) {
+    if (state.openvpn_ok === false && state.openvpn_message) {
+      openvpnWarning.style.display = "block";
+      openvpnWarning.innerHTML = `<strong>OpenVPN 核心不可用：</strong>${esc(state.openvpn_message)}`;
+    } else {
+      openvpnWarning.style.display = "none";
+      openvpnWarning.textContent = "";
+    }
+  }
+
   // Update proxy test status card based on background checks
   const pBadge = $("proxy_status_badge");
   const pIpVal = $("proxy_ip_val");

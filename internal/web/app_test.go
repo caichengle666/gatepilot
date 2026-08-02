@@ -341,6 +341,7 @@ func TestIndexShowsNetworkSettingsAndNodeLatency(t *testing.T) {
 	for _, expected := range []string{
 		"net_upstream_proxy", "net_speed_test_url", "runSpeedTest()",
 		"单次最多读取 20 MB", "节点延迟", "${latencyText}${testBtn}",
+		"openvpn_warning", "state.openvpn_ok === false",
 	} {
 		if !strings.Contains(indexHTML, expected) {
 			t.Fatalf("index is missing %q", expected)
