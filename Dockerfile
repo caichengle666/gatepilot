@@ -3,7 +3,8 @@
 FROM golang:1.26-bookworm AS builder
 
 WORKDIR /src
-COPY go.mod ./
+COPY go.mod go.sum ./
+RUN go mod download
 COPY main.go elevate_other.go elevate_windows.go instance_other.go instance_windows.go startup.go ./
 COPY internal ./internal
 
