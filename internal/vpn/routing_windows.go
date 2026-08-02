@@ -4,6 +4,7 @@ package vpn
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -185,7 +186,9 @@ func cleanupStaleVPNState(openVPNCommand string) {
 	if err != nil || !isBundledOpenVPNExecutable(applicationExecutable, openVPNExecutable) {
 		return
 	}
-	command := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `$target = [IO.Path]::GetFullPath($args[0]); Get-CimInstance Win32_Process -Filter "Name='openvpn.exe'" | Where-Object { $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $target -and -not (Get-Process -Id $_.ParentProcessId -ErrorAction SilentlyContinue) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`, openVPNExecutable)
+	escaped := strings.ReplaceAll(openVPNExecutable, "'", "''")
+	script := fmt.Sprintf(`$target = [IO.Path]::GetFullPath('%s'); Get-CimInstance Win32_Process -Filter "Name='openvpn.exe'" | Where-Object { $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $target -and -not (Get-Process -Id $_.ParentProcessId -ErrorAction SilentlyContinue) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`, escaped)
+	command := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
 	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	if output, runErr := command.CombinedOutput(); runErr != nil {
 		log.Printf("Unable to drain orphaned bundled OpenVPN processes: %v (%s)", runErr, strings.TrimSpace(string(output)))

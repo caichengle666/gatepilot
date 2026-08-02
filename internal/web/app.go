@@ -230,6 +230,8 @@ func (a *Application) handleGET(writer http.ResponseWriter, request *http.Reques
 			return
 		}
 		writeJSONResponse(writer, http.StatusOK, a.Proxy.Traffic())
+	case path == "/api/split_routing":
+		a.getSplitRouting(writer, request)
 	case path == "/api/logs":
 		limit, _ := strconv.Atoi(request.URL.Query().Get("limit"))
 		writeJSONResponse(writer, http.StatusOK, map[string]any{"logs": a.Store.RecentLogs(limit)})
