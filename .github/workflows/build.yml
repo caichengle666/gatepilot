@@ -134,14 +134,17 @@ jobs:
           mkdir -p release
           version="${GITHUB_REF_NAME#v}"
 
-          for directory in artifacts/*/; do
-            name="$(basename "$directory")"
-            cp "${directory}"* "release/${name}"
-          done
-
-          for file in release/gatepilot-*; do
-            base="$(basename "$file")"
-            mv "$file" "release/gatepilot-${version}-${base#gatepilot-}"
+          for artifact_directory in artifacts/gatepilot-*/; do
+            artifact_name="$(basename "$artifact_directory")"
+            suffix="${artifact_name#gatepilot-}"
+            for file in "${artifact_directory}"*; do
+              extension="${file##*.}"
+              if [ "$extension" = "exe" ]; then
+                cp "$file" "release/gatepilot-${version}-${suffix}.exe"
+              else
+                cp "$file" "release/gatepilot-${version}-${suffix}"
+              fi
+            done
           done
 
           sudo apt-get update -qq
