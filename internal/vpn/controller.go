@@ -268,6 +268,11 @@ func (c *Controller) runUntilReady(candidate store.Node, device string, timeout 
 	drivers := openVPNDriverCandidates(c.openVPNVersion())
 	var lastError error
 	for index, driver := range drivers {
+		if driver == "tap-windows6" {
+			if tapErr := ensureTAPAdapter(c.application.Config.OpenVPNCommand); tapErr != nil {
+				c.application.LogEvent("warning", "OpenVPN", "自动创建 TAP 网卡失败: "+tapErr.Error())
+			}
+		}
 		run, err := c.runUntilReadyWithDriver(candidate, device, driver, timeout, routeNopull)
 		if err == nil {
 			return run, nil
