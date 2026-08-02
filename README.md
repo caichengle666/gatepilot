@@ -37,7 +37,7 @@ OpenVPN 进程 → Linux tun0 / Windows Wintun 或 TAP
 - Go 1.18 或更高版本。
 - OpenVPN；Linux 还需要 `iproute2` 和 CA 证书。
 
-Windows 原生模式支持 OpenVPN 2.4 及以上版本。GatePilot 会自动查找 `C:\Program Files\OpenVPN\bin\openvpn.exe`；OpenVPN 2.5 及以上优先使用 Wintun，并把本地 HTTP/SOCKS5 代理的 TCP 和 DNS 出站绑定到该虚拟网卡。
+Windows 原生模式支持 OpenVPN 2.4 及以上版本。GatePilot 会自动查找 `C:\Program Files\OpenVPN\bin\openvpn.exe`；OpenVPN 2.5/2.6 使用 Wintun，2.7 及以上使用 OpenVPN 默认的 Windows 驱动，并把本地 HTTP/SOCKS5 代理的 TCP 和 DNS 出站绑定到该虚拟网卡。
 
 ## Windows 运行
 
