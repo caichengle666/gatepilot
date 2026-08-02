@@ -28,6 +28,7 @@ type Server struct {
 	username   string
 	password   string
 	requireTun bool
+	traffic    trafficCounter
 	mu         sync.Mutex
 	listener   net.Listener
 }
@@ -167,7 +168,7 @@ func (s *Server) handleSOCKS5(client net.Conn) {
 	}
 	defer upstream.Close()
 	_, _ = client.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
-	relay(client, upstream)
+	s.relayTraffic(client, upstream)
 }
 
 func (s *Server) readSOCKSAuth(client net.Conn) bool {
@@ -261,7 +262,7 @@ func (s *Server) handleHTTP(client net.Conn, first byte) {
 	if err := request.Write(upstream); err != nil {
 		return
 	}
-	relay(client, upstream)
+	s.relayTraffic(client, upstream)
 }
 
 func (s *Server) authorizedHTTP(header string) bool {
@@ -289,7 +290,7 @@ func (s *Server) handleConnect(client net.Conn, authority string) {
 	}
 	defer upstream.Close()
 	_, _ = io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n")
-	relay(client, upstream)
+	s.relayTraffic(client, upstream)
 }
 
 func writeProxyResponse(connection net.Conn, status int, message string) {
@@ -297,16 +298,21 @@ func writeProxyResponse(connection net.Conn, status int, message string) {
 	_, _ = fmt.Fprintf(connection, "HTTP/1.1 %d %s\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", status, http.StatusText(status), len(body), body)
 }
 
-func relay(left, right net.Conn) {
+// Traffic 返回当前代理流量统计。
+func (s *Server) Traffic() TrafficStats {
+	return s.traffic.snapshot()
+}
+
+func (s *Server) relayTraffic(left, right net.Conn) {
 	done := make(chan struct{}, 2)
-	copyConnection := func(destination, source net.Conn) {
-		_, _ = io.Copy(destination, source)
+	copyConnection := func(destination, source net.Conn, counter func(int64)) {
+		_, _ = io.Copy(destination, &countingReader{reader: source, counter: counter})
 		if tcp, ok := destination.(*net.TCPConn); ok {
 			_ = tcp.CloseWrite()
 		}
 		done <- struct{}{}
 	}
-	go copyConnection(left, right)
-	go copyConnection(right, left)
+	go copyConnection(left, right, s.traffic.addDownload)
+	go copyConnection(right, left, s.traffic.addUpload)
 	<-done
 }

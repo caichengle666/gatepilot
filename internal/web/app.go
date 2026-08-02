@@ -158,6 +158,12 @@ func (a *Application) handleGET(writer http.ResponseWriter, request *http.Reques
 		writeJSONResponse(writer, http.StatusOK, map[string]any{"nodes": nodes, "state": statePayload(ui, state), "ui_config": publicUIConfig(ui)})
 	case path == "/api/gateway_status":
 		writeJSONResponse(writer, http.StatusOK, a.gatewayStatus())
+	case path == "/api/traffic":
+		if a.Proxy == nil {
+			writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": false, "error": "本地代理未启动"})
+			return
+		}
+		writeJSONResponse(writer, http.StatusOK, a.Proxy.Traffic())
 	case path == "/api/logs":
 		limit, _ := strconv.Atoi(request.URL.Query().Get("limit"))
 		writeJSONResponse(writer, http.StatusOK, map[string]any{"logs": a.Store.RecentLogs(limit)})

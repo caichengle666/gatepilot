@@ -1420,6 +1420,7 @@ function render(){
             </div>
             <div class="active-card-meta" style="margin-top: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
               <span>出口 IP: <strong class="mono">${esc(state.proxy_ip || "-")}</strong></span>
+              <span id="dashboard_traffic" style="font-size: 12px; color: var(--text-secondary);">实时网速加载中...</span>
               <button type="button" id="dashboard_speed_test_btn" onclick="runDashboardSpeedTest()" class="btn-primary" style="height: 30px; padding: 0 12px; border-radius: 8px; font-size: 12px;" ${dashboardSpeedTest.running ? "disabled" : ""}>${dashboardSpeedTest.running ? "测速中..." : "宽带测速"}</button>
               <span id="dashboard_speed_test_result" style="font-size: 12px; color: ${dashboardSpeedTest.color};">${esc(dashboardSpeedTest.text)}</span>
             </div>
@@ -2392,6 +2393,35 @@ async function logoutAdmin() {
 
 // 页面加载时自动初始化数据
 load();
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(2) + " GB";
+  if (bytes >= 1048576) return (bytes / 1048576).toFixed(2) + " MB";
+  if (bytes >= 1024) return (bytes / 1024).toFixed(2) + " KB";
+  return bytes.toFixed(0) + " B";
+}
+
+function formatRate(value) {
+  const bits = Number(value || 0) * 8;
+  if (bits >= 1000000) return (bits / 1000000).toFixed(2) + " Mbps";
+  if (bits >= 1000) return (bits / 1000).toFixed(1) + " Kbps";
+  return bits.toFixed(0) + " bps";
+}
+
+async function updateTrafficStats() {
+  const trafficElement = $("dashboard_traffic");
+  if (!trafficElement) return;
+  try {
+    const response = await fetch("./api/traffic", { cache: "no-store" });
+    const traffic = await response.json();
+    trafficElement.textContent = `实时 ↓ ${formatRate(traffic.download_bps)} / ↑ ${formatRate(traffic.upload_bps)} · 会话 ↓ ${formatBytes(traffic.download_bytes)} / ↑ ${formatBytes(traffic.upload_bytes)}`;
+  } catch (error) {
+    trafficElement.textContent = "实时网速不可用";
+  }
+}
+
+setInterval(updateTrafficStats, 1000);
 
 // 每 10 秒在前台空闲时自动更新节点与状态，无需手动刷新页面
 setInterval(async () => {
