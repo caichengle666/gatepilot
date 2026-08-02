@@ -179,6 +179,8 @@ jobs:
             copy_openvpn_file libpkcs11-helper-1.dll "libpkcs11*helper*.dll"
             copy_openvpn_file vcruntime140.dll "vcruntime140.dll"
           fi
+          cp openvpn/wintun.dll "release/${portable}/openvpn/"
+          cp -r openvpn/tap-driver "release/${portable}/openvpn/"
           cp README.md LICENSE "release/${portable}/"
 
           (cd release && zip -qr "${portable}.zip" "$portable")

@@ -15,6 +15,9 @@ import (
 )
 
 func main() {
+	if vpn.RunWindowsOpenVPNService(os.Args[1:]) {
+		return
+	}
 	ensureAdminElevation()
 	releaseInstance, err := acquireInstanceLock()
 	if err != nil {

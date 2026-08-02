@@ -2,6 +2,10 @@
 
 package vpn
 
+func ensureTAPAdapter(_ string) error {
+	return nil
+}
+
 func openVPNDeviceArguments(device string, _ float64, _ string) []string {
 	return []string{"--dev", device, "--dev-type", "tun"}
 }

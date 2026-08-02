@@ -40,7 +40,7 @@ OpenVPN 进程 → Linux tun0 / Windows Wintun 或 TAP
 ## 系统要求
 
 - Linux 需要 root 权限和可用的 TUN/TAP 设备；Windows 需要以管理员身份运行。
-- Go 1.18 或更高版本。
+- Go 1.23 或更高版本。
 - OpenVPN；Linux 还需要 `iproute2` 和 CA 证书。
 
 Windows 原生模式支持 OpenVPN 2.4 及以上版本。GatePilot 会按以下顺序查找 OpenVPN：
@@ -51,17 +51,19 @@ Windows 原生模式支持 OpenVPN 2.4 及以上版本。GatePilot 会按以下�
 4. `C:\Program Files\OpenVPN\bin\openvpn.exe`；
 5. `PATH` 中的 `openvpn.exe`。
 
-OpenVPN 2.6 及以上在 Windows 上默认使用 Wintun 驱动，并把本地 HTTP/SOCKS5 代理的 TCP 和 DNS 出站绑定到该虚拟网卡。
+OpenVPN 2.6 及以上在 Windows 上默认使用 Wintun 驱动。GatePilot 首次连接时会自动安装按需启动的 `GatePilotOpenVPN` Windows 服务，由 LocalSystem 运行内置 OpenVPN 核心；网页和代理进程仍以普通管理员权限运行。
 
 ## Windows 运行
 
 1. 从 GitHub Releases 下载 `gatepilot-<版本>-windows-amd64-portable.zip`。
 2. 解压后目录内已包含 `gatepilot.exe` 和 `openvpn\` 便携核心文件。仓库 `openvpn/` 目录也提供同一套 Windows OpenVPN 核心文件。
-3. 右键选择“以管理员身份运行”。Wintun 虚拟网卡需要管理员/SYSTEM 权限；非管理员运行时 OpenVPN 会报 `Wintun requires SYSTEM privileges`。
+3. 双击 `gatepilot.exe` 并接受首次 UAC 提权。GatePilot 会自动安装 LocalSystem OpenVPN 服务，不需要手工安装虚拟网卡。
 4. 从终端输出打开管理地址，并在页面连接节点。
 5. 将需要走 VPN 的应用代理设置为 `127.0.0.1:7928`，协议使用 HTTP 或 SOCKS5。
 
 Windows 默认只允许一个 GatePilot 实例运行。重复启动会在创建 OpenVPN 进程前退出；如果 Web 管理端口或本地代理端口已被其他程序占用，也会直接提示端口冲突，不会额外创建 Wintun 网卡。
+
+Windows 驱动顺序为：LocalSystem 服务中的 Wintun、TAP-Windows6、OpenVPN DCO。Wintun 服务安装或启动失败时，GatePilot 会自动安装随包提供的 TAP 驱动并回退连接，不需要用户切换配置。
 
 如果节点维护或连接任务异常卡住超过 2 分钟，Web 手动连接会自动恢复该锁，避免页面一直提示“当前已有连接或节点维护任务正在运行”。
 

@@ -16,6 +16,9 @@ func openVPNDeviceArguments(_ string, version float64, driver string) []string {
 	arguments := []string{"--dev", "tun"}
 	if version >= 2.6 && driver != "" {
 		arguments = append(arguments, "--windows-driver", driver)
+		if driver == "wintun" {
+			arguments = append(arguments, "--dev-node", "OpenVPN")
+		}
 	}
 	return arguments
 }

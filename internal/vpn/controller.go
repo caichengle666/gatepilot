@@ -23,7 +23,7 @@ import (
 type Controller struct {
 	mu          sync.Mutex
 	application *store.Store
-	command     *exec.Cmd
+	command     managedOpenVPNProcess
 	nodeID      string
 	testIndex   int
 	versionOnce sync.Once
@@ -31,7 +31,7 @@ type Controller struct {
 }
 
 type openVPNRun struct {
-	command *exec.Cmd
+	process managedOpenVPNProcess
 	done    <-chan error
 	tail    []string
 }
@@ -304,18 +304,14 @@ func (c *Controller) runUntilReadyWithDriver(candidate store.Node, device, windo
 	if err != nil {
 		return nil, err
 	}
-	output, err := command.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	command.Stderr = command.Stdout
 	preparePolicyRouting()
-	if err := command.Start(); err != nil {
+	output, process, done, err := startOpenVPNProcess(command, windowsDriver)
+	if err != nil {
 		return nil, c.openVPNError(err, nil)
 	}
 	lines := make(chan string, 128)
-	done := make(chan error, 1)
 	go func() {
+		defer output.Close()
 		scanner := bufio.NewScanner(output)
 		scanner.Buffer(make([]byte, 64<<10), 1<<20)
 		for scanner.Scan() {
@@ -328,7 +324,6 @@ func (c *Controller) runUntilReadyWithDriver(candidate store.Node, device, windo
 		}
 		close(lines)
 	}()
-	go func() { done <- command.Wait() }()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	tail := make([]string, 0, 16)
@@ -336,7 +331,7 @@ func (c *Controller) runUntilReadyWithDriver(candidate store.Node, device, windo
 		select {
 		case line, open := <-lines:
 			if !open {
-				stopCommandAndWait(command, done)
+				stopCommandAndWait(process, done)
 				return nil, c.openVPNError(errors.New("OpenVPN 输出已关闭"), tail)
 			}
 			tail = append(tail, line)
@@ -347,16 +342,16 @@ func (c *Controller) runUntilReadyWithDriver(candidate store.Node, device, windo
 			lower := strings.ToLower(line)
 			if strings.Contains(lower, "initialization sequence completed") {
 				ready = true
-				return &openVPNRun{command: command, done: done, tail: tail}, nil
+				return &openVPNRun{process: process, done: done, tail: tail}, nil
 			}
 			if strings.Contains(lower, "auth_failed") || strings.Contains(lower, "fatal error") || strings.Contains(lower, "exiting due to fatal error") {
-				stopCommandAndWait(command, done)
+				stopCommandAndWait(process, done)
 				return nil, c.openVPNError(errors.New(line), tail)
 			}
 		case waitErr := <-done:
 			return nil, c.openVPNError(waitErr, tail)
 		case <-timer.C:
-			stopCommandAndWait(command, done)
+			stopCommandAndWait(process, done)
 			return nil, c.openVPNError(errors.New("OpenVPN 连接超时"), tail)
 		}
 	}
@@ -427,7 +422,7 @@ func (c *Controller) Connect(nodeID string) (string, error) {
 		return "", err
 	}
 	c.mu.Lock()
-	c.command, c.nodeID = run.command, candidate.ID
+	c.command, c.nodeID = run.process, candidate.ID
 	c.mu.Unlock()
 	setupPolicyRouting("tun0")
 	if err := waitForVPNReady(15 * time.Second); err != nil {
@@ -449,7 +444,7 @@ func (c *Controller) Connect(nodeID string) (string, error) {
 		}
 	})
 	c.application.LogEvent("info", "VPN", "节点 "+candidate.ID+" 连接成功，tun0 已启用")
-	go c.monitor(run.command, candidate, run.done)
+	go c.monitor(run.process, candidate, run.done)
 	return "已连接 " + candidate.ID, nil
 }
 
@@ -504,7 +499,7 @@ func (c *Controller) TestNode(nodeID string) (store.Node, error) {
 		updated, _ := c.application.NodeByID(candidate.ID)
 		return updated, err
 	}
-	stopCommand(run.command)
+	stopCommand(run.process)
 	select {
 	case <-run.done:
 	case <-time.After(3 * time.Second):
@@ -573,7 +568,7 @@ func MeasureNodeLatency(candidate store.Node, timeout time.Duration) int64 {
 	return time.Since(started).Milliseconds()
 }
 
-func (c *Controller) monitor(command *exec.Cmd, candidate store.Node, done <-chan error) {
+func (c *Controller) monitor(command managedOpenVPNProcess, candidate store.Node, done <-chan error) {
 	err := <-done
 	c.mu.Lock()
 	if c.command != command {
@@ -609,16 +604,14 @@ func (c *Controller) Stop(message string) {
 	_ = c.application.UpdateState(func(state *store.RuntimeState) { state.ActiveNodeLatency = "无活动连接" })
 }
 
-func stopCommand(command *exec.Cmd) {
-	if command == nil || command.Process == nil {
+func stopCommand(command managedOpenVPNProcess) {
+	if command == nil {
 		return
 	}
-	_ = command.Process.Signal(os.Interrupt)
-	time.Sleep(250 * time.Millisecond)
-	_ = command.Process.Kill()
+	command.Stop()
 }
 
-func stopCommandAndWait(command *exec.Cmd, done <-chan error) {
+func stopCommandAndWait(command managedOpenVPNProcess, done <-chan error) {
 	stopCommand(command)
 	select {
 	case <-done:

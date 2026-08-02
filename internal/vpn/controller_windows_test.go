@@ -15,7 +15,7 @@ func TestOpenVPNDeviceArgumentsWindows(t *testing.T) {
 		want    []string
 	}{
 		{version: 2.4, driver: "", want: []string{"--dev", "tun"}},
-		{version: 2.6, driver: "wintun", want: []string{"--dev", "tun", "--windows-driver", "wintun"}},
+		{version: 2.6, driver: "wintun", want: []string{"--dev", "tun", "--windows-driver", "wintun", "--dev-node", "OpenVPN"}},
 		{version: 2.7, driver: "tap-windows6", want: []string{"--dev", "tun", "--windows-driver", "tap-windows6"}},
 	}
 	for _, test := range tests {

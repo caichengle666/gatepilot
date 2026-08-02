@@ -174,6 +174,7 @@ func cleanupPolicyRouting() {
 }
 
 func cleanupStaleVPNState(openVPNCommand string) {
+	_ = stopOpenVPNService(5 * time.Second)
 	parts, err := splitCommandLine(openVPNCommand)
 	if err != nil || len(parts) == 0 {
 		return
