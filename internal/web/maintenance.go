@@ -214,9 +214,8 @@ func (a *Application) proxyHTTPClient(timeout time.Duration) *http.Client {
 	proxyURL := &url.URL{
 		Scheme: "http", Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(ui.ProxyPort)),
 	}
-	proxyUser := store.EnvString("LOCAL_PROXY_USER", store.Getenv("LOCAL_PROXY_USERNAME"))
-	proxyPassword := store.EnvString("LOCAL_PROXY_PASS", store.Getenv("LOCAL_PROXY_PASSWORD"))
-	if proxyUser != "" || proxyPassword != "" {
+	proxyUser, proxyPassword, enabled := store.ProxyCredentials(ui)
+	if enabled {
 		proxyURL.User = url.UserPassword(proxyUser, proxyPassword)
 	}
 	return &http.Client{Timeout: timeout, Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}

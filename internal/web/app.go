@@ -251,6 +251,7 @@ func (a *Application) handleGET(writer http.ResponseWriter, request *http.Reques
 func publicUIConfig(ui store.UIConfig) map[string]any {
 	return map[string]any{
 		"host": ui.Host, "port": ui.Port, "proxy_port": ui.ProxyPort, "upstream_proxy": ui.UpstreamProxy,
+		"proxy_auth_enabled": ui.ProxyAuthEnabled, "proxy_username": ui.ProxyUsername, "proxy_password_set": ui.ProxyPassword != "",
 		"speed_test_url": ui.SpeedTestURL,
 		"routing_mode":   ui.RoutingMode, "force_country": ui.ForceCountry,
 		"routing_ip_type": ui.RoutingIPType, "connection_enabled": ui.ConnectionEnabled,
@@ -268,6 +269,9 @@ func statePayload(ui store.UIConfig, state store.RuntimeState) map[string]any {
 	result["secret_path"] = ui.SecretPath
 	result["password_set"] = ui.Password != ""
 	result["proxy_port"] = ui.ProxyPort
+	result["proxy_auth_enabled"] = ui.ProxyAuthEnabled
+	result["proxy_username"] = ui.ProxyUsername
+	result["proxy_password_set"] = ui.ProxyPassword != ""
 	result["upstream_proxy"] = ui.UpstreamProxy
 	result["speed_test_url"] = ui.SpeedTestURL
 	result["routing_mode"] = ui.RoutingMode
@@ -571,8 +575,10 @@ func (a *Application) updateSettings(writer http.ResponseWriter, request *http.R
 	}
 	var webPortChanged, proxyPortChanged bool
 	var proxyPort int
+	var proxyAuthChanged bool
 	err := a.Store.MutateUI(func(ui *store.UIConfig, state store.RuntimeState) error {
 		oldPort, oldProxyPort := ui.Port, ui.ProxyPort
+		oldProxyAuthEnabled, oldProxyUsername, oldProxyPassword := ui.ProxyAuthEnabled, ui.ProxyUsername, ui.ProxyPassword
 		if value, ok := payload["host"].(string); ok && strings.TrimSpace(value) != "" {
 			ui.Host = strings.TrimSpace(value)
 		}
@@ -607,6 +613,32 @@ func (a *Application) updateSettings(writer http.ResponseWriter, request *http.R
 				return errors.New("宽带测速网址格式无效: " + normalizeErr.Error())
 			}
 			ui.SpeedTestURL = normalized
+		}
+		if raw, exists := payload["proxy_auth_enabled"]; exists {
+			enabled, ok := raw.(bool)
+			if !ok {
+				return errors.New("代理认证开关格式无效")
+			}
+			ui.ProxyAuthEnabled = enabled
+		}
+		if raw, exists := payload["proxy_username"]; exists {
+			value, ok := raw.(string)
+			if !ok {
+				return errors.New("代理认证用户名格式无效")
+			}
+			ui.ProxyUsername = strings.TrimSpace(value)
+		}
+		if raw, exists := payload["proxy_password"]; exists {
+			value, ok := raw.(string)
+			if !ok {
+				return errors.New("代理认证密码格式无效")
+			}
+			if strings.TrimSpace(value) != "" {
+				ui.ProxyPassword = value
+			}
+		}
+		if err := store.ValidateProxyAuth(a.Store.Config.ProxyHost, *ui); err != nil {
+			return err
 		}
 		if ui.Port == ui.ProxyPort {
 			return errors.New("代理端口不能与网页端口相同")
@@ -651,6 +683,7 @@ func (a *Application) updateSettings(writer http.ResponseWriter, request *http.R
 		webPortChanged = oldPort != ui.Port
 		proxyPortChanged = oldProxyPort != ui.ProxyPort
 		proxyPort = ui.ProxyPort
+		proxyAuthChanged = oldProxyAuthEnabled != ui.ProxyAuthEnabled || oldProxyUsername != ui.ProxyUsername || oldProxyPassword != ui.ProxyPassword
 		return nil
 	})
 	if err != nil {
@@ -662,6 +695,10 @@ func (a *Application) updateSettings(writer http.ResponseWriter, request *http.R
 		return
 	}
 	a.enforceRoutingSettings()
+	if proxyAuthChanged && a.Proxy != nil {
+		username, password, _ := store.ProxyCredentials(uiSnapshot(a.Store))
+		a.Proxy.UpdateAuth(username, password)
+	}
 	message := "配置更新成功，已即时生效！"
 	restartNeeded := webPortChanged || proxyPortChanged
 	if restartNeeded {
@@ -700,6 +737,11 @@ func (a *Application) enforceRoutingSettings() {
 			go a.autoSwitch(0)
 		}
 	}
+}
+
+func uiSnapshot(application *store.Store) store.UIConfig {
+	ui, _, _ := application.Snapshot()
+	return ui
 }
 
 func numberFromJSON(value any) (int, bool) {

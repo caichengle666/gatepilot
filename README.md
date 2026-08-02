@@ -32,6 +32,7 @@ OpenVPN 进程 → Linux tun0 / Windows Wintun 或 TAP
 - 清理远端配置中的脚本、插件和管理接口等危险指令。
 - 在 Linux 上绑定 `tun0`，在 Windows 上自动识别 OpenVPN 网卡并绑定代理出站，避免流量绕过 VPN。
 - 同一端口提供 HTTP、HTTPS CONNECT 和 SOCKS5 代理。
+- 支持在 Web 页面配置 HTTP/SOCKS5 代理认证；代理监听非本机地址时强制要求启用认证。
 - 支持可选的 HTTP Basic / SOCKS5 用户名密码认证。
 - 提供登录保护的 Web 页面和 JSON API。
 - 保存节点、运行状态和管理凭据，重启后继续使用。
@@ -162,6 +163,8 @@ curl --proxy socks5h://127.0.0.1:7928 https://api.ipify.org
 
 代理默认只绑定回环地址。确需开放给其他设备时，应同时配置认证和防火墙：
 
+也可以在 Web “代理设置”中启用代理认证并设置用户名/密码。环境变量凭据优先于 Web 配置。若代理监听地址不是本机地址，但未启用任何代理认证，GatePilot 会拒绝启动或拒绝保存设置。
+
 ```bash
 export LOCAL_PROXY_HOST=0.0.0.0
 export LOCAL_PROXY_USER=your-user
@@ -179,8 +182,8 @@ export LOCAL_PROXY_PASS=your-strong-password
 | `LOCAL_PROXY_PORT` | `7928` | 代理端口 |
 | `LOCAL_PROXY_MAX_CONNECTIONS` | `256` | 最大并发连接数 |
 | `LOCAL_PROXY_BIND_TUN` | `true` | 强制把代理出站绑定到 Linux `tun0` 或 Windows OpenVPN 网卡 |
-| `LOCAL_PROXY_USER` | 空 | 代理认证用户名 |
-| `LOCAL_PROXY_PASS` | 空 | 代理认证密码 |
+| `LOCAL_PROXY_USER` | 空 | 代理认证用户名；优先于 Web 配置 |
+| `LOCAL_PROXY_PASS` | 空 | 代理认证密码；优先于 Web 配置 |
 | `UI_HOST` | `::` | Web 监听地址 |
 | `UI_PORT` | `8787` | Web 端口 |
 | `UPSTREAM_PROXY` | 空 | 前置代理初始值；可在 Web 页面修改，用于拉取节点列表和帮助 TCP 节点建立隧道 |

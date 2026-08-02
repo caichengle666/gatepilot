@@ -995,6 +995,24 @@
         </div>
 
         <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="net_proxy_auth_enabled" onchange="toggleProxyAuthFields()" style="width: 16px; height: 16px; accent-color: var(--primary);">
+            启用 HTTP/SOCKS5 代理认证
+          </label>
+          <div style="font-size: 12px; color: var(--text-secondary); margin-top: 6px; line-height: 1.5;">代理默认只监听 127.0.0.1。若通过环境变量监听 0.0.0.0 对外提供代理，必须启用认证。</div>
+          <div id="net_proxy_auth_fields" style="display: none; margin-top: 12px; gap: 12px;">
+            <div>
+              <label class="form-label" for="net_proxy_username">代理用户名</label>
+              <input type="text" id="net_proxy_username" class="input-field" autocomplete="off" placeholder="proxy-user">
+            </div>
+            <div>
+              <label class="form-label" for="net_proxy_password">代理密码</label>
+              <input type="password" id="net_proxy_password" class="input-field" autocomplete="new-password" placeholder="留空表示不修改已保存密码">
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 16px;">
           <label class="form-label" for="net_upstream_proxy">前置代理（可选）</label>
           <input type="text" id="net_upstream_proxy" class="input-field" placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080">
           <div style="font-size: 12px; color: var(--text-secondary); margin-top: 6px; line-height: 1.5;">用于拉取节点列表，并帮助 TCP 节点建立隧道；应用流量连接成功后只走 VPN。UDP 节点直连。留空表示直连。</div>
@@ -2192,6 +2210,10 @@ function openNetworkModal() {
   
   if (state) {
     $("net_proxy_port").value = state.proxy_port || 7928;
+    $("net_proxy_auth_enabled").checked = !!state.proxy_auth_enabled;
+    $("net_proxy_username").value = state.proxy_username || "";
+    $("net_proxy_password").value = "";
+    $("net_proxy_password").placeholder = state.proxy_password_set ? "已设置，留空表示不修改" : "输入代理密码";
     $("net_upstream_proxy").value = state.upstream_proxy || "";
     $("net_speed_test_url").value = state.speed_test_url || defaultSpeedTestURL;
     const mode = state.routing_mode || "auto";
@@ -2202,6 +2224,7 @@ function openNetworkModal() {
   }
 
   $("network_speed_test_result").textContent = "";
+  toggleProxyAuthFields();
   
   populateRoutingCountries();
   $("network_modal").style.display = "flex";
@@ -2210,6 +2233,13 @@ function openNetworkModal() {
 
 function closeNetworkModal() {
   $("network_modal").style.display = "none";
+}
+
+function toggleProxyAuthFields() {
+  const enabled = $("net_proxy_auth_enabled").checked;
+  $("net_proxy_auth_fields").style.display = enabled ? "grid" : "none";
+  $("net_proxy_username").required = enabled;
+  $("net_proxy_password").required = enabled && !(state && state.proxy_password_set);
 }
 
 async function saveNetwork(e) {
@@ -2222,6 +2252,9 @@ async function saveNetwork(e) {
   successDiv.style.display = "none";
   
   const proxyPort = parseInt($("net_proxy_port").value);
+  const proxyAuthEnabled = $("net_proxy_auth_enabled").checked;
+  const proxyUsername = $("net_proxy_username").value.trim();
+  const proxyPassword = $("net_proxy_password").value;
   const upstreamProxy = $("net_upstream_proxy").value.trim();
   const speedTestURL = $("net_speed_test_url").value.trim() || defaultSpeedTestURL;
   const routingMode = $("net_routing_mode").value;
@@ -2238,6 +2271,19 @@ async function saveNetwork(e) {
     errorDivEl.textContent = "代理出站端口不能与网页管理端口相同";
     errorDivEl.style.display = "block";
     return;
+  }
+
+  if (proxyAuthEnabled) {
+    if (!proxyUsername) {
+      errorDivEl.textContent = "启用代理认证时，用户名不能为空";
+      errorDivEl.style.display = "block";
+      return;
+    }
+    if (!proxyPassword && !(state && state.proxy_password_set)) {
+      errorDivEl.textContent = "启用代理认证时，密码不能为空";
+      errorDivEl.style.display = "block";
+      return;
+    }
   }
   
   if (routingMode === "fixed_region" && !forceCountry) {
@@ -2260,6 +2306,9 @@ async function saveNetwork(e) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         proxy_port: proxyPort,
+        proxy_auth_enabled: proxyAuthEnabled,
+        proxy_username: proxyUsername,
+        proxy_password: proxyPassword,
         upstream_proxy: upstreamProxy,
         speed_test_url: speedTestURL,
         routing_mode: routingMode,

@@ -3,6 +3,7 @@ package store
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -54,6 +55,44 @@ func LoadAppConfig() AppConfig {
 		InitialTestLimit:    EnvInt("INITIAL_CONNECT_TEST_LIMIT", 10, 1, 50),
 		DisableBackground:   EnvBool("DISABLE_BACKGROUND_FETCH", false),
 	}
+}
+
+// ProxyHostIsLocal 判断代理监听地址是否只面向本机。
+func ProxyHostIsLocal(host string) bool {
+	switch strings.TrimSpace(strings.ToLower(host)) {
+	case "", "127.0.0.1", "localhost", "::1", "[::1]":
+		return true
+	default:
+		return false
+	}
+}
+
+// ProxyCredentials 返回最终生效的代理认证凭据。
+func ProxyCredentials(ui UIConfig) (username, password string, enabled bool) {
+	username = strings.TrimSpace(EnvString("LOCAL_PROXY_USER", Getenv("LOCAL_PROXY_USERNAME")))
+	password = strings.TrimSpace(EnvString("LOCAL_PROXY_PASS", Getenv("LOCAL_PROXY_PASSWORD")))
+	if username != "" || password != "" {
+		return username, password, true
+	}
+	if ui.ProxyAuthEnabled {
+		return strings.TrimSpace(ui.ProxyUsername), ui.ProxyPassword, true
+	}
+	return "", "", false
+}
+
+// ValidateProxyAuth 校验代理监听地址和认证配置是否安全。
+func ValidateProxyAuth(host string, ui UIConfig) error {
+	_, _, enabled := ProxyCredentials(ui)
+	if !ProxyHostIsLocal(host) && !enabled {
+		return errors.New("代理监听非本机地址时，必须启用代理认证")
+	}
+	if enabled {
+		username, password, _ := ProxyCredentials(ui)
+		if username == "" || password == "" {
+			return errors.New("启用代理认证时，用户名和密码都不能为空")
+		}
+	}
+	return nil
 }
 
 // EnvString 读取字符串环境变量。

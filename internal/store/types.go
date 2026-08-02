@@ -69,6 +69,9 @@ type UIConfig struct {
 	Host              string   `json:"host"`
 	Port              int      `json:"port"`
 	ProxyPort         int      `json:"proxy_port"`
+	ProxyAuthEnabled  bool     `json:"proxy_auth_enabled"`
+	ProxyUsername     string   `json:"proxy_username"`
+	ProxyPassword     string   `json:"proxy_password"`
 	UpstreamProxy     string   `json:"upstream_proxy"`
 	SpeedTestURL      string   `json:"speed_test_url"`
 	RoutingMode       string   `json:"routing_mode"`

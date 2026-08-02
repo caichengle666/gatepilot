@@ -16,7 +16,7 @@ import (
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	config := store.AppConfig{ProxyHost: "127.0.0.1", ProxyPort: 0, ProxyMaxConnections: 8}
-	server := NewServer(config)
+	server := NewServer(config, store.UIConfig{})
 	server.requireTun = false
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -121,8 +121,7 @@ func TestSOCKS5ProxyRequest(t *testing.T) {
 
 func TestProxyAuthRejectsBadCredentials(t *testing.T) {
 	server := newTestServer(t)
-	server.username = "user"
-	server.password = "pass"
+	server.UpdateAuth("user", "pass")
 	connection, err := net.Dial("tcp", server.listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
@@ -136,5 +135,20 @@ func TestProxyAuthRejectsBadCredentials(t *testing.T) {
 	_ = response.Body.Close()
 	if response.StatusCode != http.StatusProxyAuthRequired {
 		t.Fatalf("expected 407, got %d", response.StatusCode)
+	}
+}
+
+func TestProxyAuthUpdateTakesEffect(t *testing.T) {
+	server := newTestServer(t)
+	server.UpdateAuth("user", "pass")
+	if !server.authEnabled() {
+		t.Fatal("auth should be enabled after UpdateAuth")
+	}
+	if !server.credentialsMatch("user", "pass") {
+		t.Fatal("updated credentials should match")
+	}
+	server.UpdateAuth("", "")
+	if server.authEnabled() {
+		t.Fatal("auth should be disabled after clearing credentials")
 	}
 }

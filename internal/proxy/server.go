@@ -34,9 +34,8 @@ type Server struct {
 }
 
 // NewServer 创建代理服务器。
-func NewServer(config store.AppConfig) *Server {
-	username := store.EnvString("LOCAL_PROXY_USER", store.Getenv("LOCAL_PROXY_USERNAME"))
-	password := store.EnvString("LOCAL_PROXY_PASS", store.Getenv("LOCAL_PROXY_PASSWORD"))
+func NewServer(config store.AppConfig, ui store.UIConfig) *Server {
+	username, password, _ := store.ProxyCredentials(ui)
 	return &Server{
 		host: config.ProxyHost, port: config.ProxyPort,
 		limit:      make(chan struct{}, config.ProxyMaxConnections),
@@ -44,6 +43,20 @@ func NewServer(config store.AppConfig) *Server {
 		password:   password,
 		requireTun: store.EnvBool("LOCAL_PROXY_BIND_TUN", true),
 	}
+}
+
+// UpdateAuth 更新代理认证凭据。
+func (s *Server) UpdateAuth(username, password string) {
+	s.mu.Lock()
+	s.username = username
+	s.password = password
+	s.mu.Unlock()
+}
+
+func (s *Server) credentials() (string, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.username, s.password
 }
 
 // Serve 启动代理监听。
@@ -112,12 +125,14 @@ func (s *Server) handle(client net.Conn) {
 }
 
 func (s *Server) authEnabled() bool {
-	return s.username != "" || s.password != ""
+	username, password := s.credentials()
+	return username != "" || password != ""
 }
 
 func (s *Server) credentialsMatch(username, password string) bool {
-	userMatch := subtle.ConstantTimeCompare([]byte(username), []byte(s.username))
-	passwordMatch := subtle.ConstantTimeCompare([]byte(password), []byte(s.password))
+	expectedUsername, expectedPassword := s.credentials()
+	userMatch := subtle.ConstantTimeCompare([]byte(username), []byte(expectedUsername))
+	passwordMatch := subtle.ConstantTimeCompare([]byte(password), []byte(expectedPassword))
 	return userMatch&passwordMatch == 1
 }
 
