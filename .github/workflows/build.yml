@@ -147,21 +147,38 @@ jobs:
             done
           done
 
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq p7zip-full
-          msi_url="https://swupdate.openvpn.org/community/releases/OpenVPN-${OPENVPN_VERSION}-${OPENVPN_BUILD}-amd64.msi"
-          curl -fL --retry 3 -o openvpn.msi "$msi_url"
-          7z x -y openvpn.msi -oopenvpn-msi >/dev/null
-
           portable="gatepilot-${version}-windows-amd64-portable"
           mkdir -p "release/${portable}/openvpn"
           cp "release/gatepilot-${version}-windows-amd64.exe" "release/${portable}/gatepilot.exe"
-          cp openvpn-msi/openvpn.exe "release/${portable}/openvpn/openvpn.exe"
-          cp openvpn-msi/tapctl.exe "release/${portable}/openvpn/tapctl.exe"
-          cp openvpn-msi/libcrypto-3-x64.dll "release/${portable}/openvpn/libcrypto-3-x64.dll"
-          cp openvpn-msi/libssl-3-x64.dll "release/${portable}/openvpn/libssl-3-x64.dll"
-          cp openvpn-msi/libpkcs11-helper-1.dll "release/${portable}/openvpn/libpkcs11-helper-1.dll"
-          cp openvpn-msi/vcruntime140.dll "release/${portable}/openvpn/vcruntime140.dll"
+
+          if [ -f openvpn/openvpn.exe ]; then
+            cp openvpn/openvpn.exe openvpn/tapctl.exe openvpn/libcrypto-3-x64.dll openvpn/libssl-3-x64.dll openvpn/libpkcs11-helper-1.dll openvpn/vcruntime140.dll "release/${portable}/openvpn/"
+          else
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq p7zip-full
+            msi_url="https://swupdate.openvpn.org/community/releases/OpenVPN-${OPENVPN_VERSION}-${OPENVPN_BUILD}-amd64.msi"
+            curl -fL --retry 3 -o openvpn.msi "$msi_url"
+            7z x -y openvpn.msi -oopenvpn-msi >/dev/null
+
+            copy_openvpn_file() {
+              target_name="$1"
+              pattern="$2"
+              source_file="$(find openvpn-msi -type f -iname "$pattern" | head -n 1)"
+              if [ -z "$source_file" ]; then
+                echo "OpenVPN MSI 中找不到 $pattern" >&2
+                find openvpn-msi -maxdepth 3 -type f | sort >&2
+                exit 1
+              fi
+              cp "$source_file" "release/${portable}/openvpn/${target_name}"
+            }
+
+            copy_openvpn_file openvpn.exe "openvpn.exe"
+            copy_openvpn_file tapctl.exe "tapctl.exe"
+            copy_openvpn_file libcrypto-3-x64.dll "libcrypto*x64.dll"
+            copy_openvpn_file libssl-3-x64.dll "libssl*x64.dll"
+            copy_openvpn_file libpkcs11-helper-1.dll "libpkcs11*helper*.dll"
+            copy_openvpn_file vcruntime140.dll "vcruntime140.dll"
+          fi
           cp README.md LICENSE "release/${portable}/"
 
           (cd release && zip -qr "${portable}.zip" "$portable")

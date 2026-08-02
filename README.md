@@ -54,10 +54,8 @@ OpenVPN 2.6 及以上在 Windows 上默认使用 Wintun 驱动，并把本地 HT
 
 ## Windows 运行
 
-1. 从 GitHub Actions 下载 `gatepilot-windows-amd64.exe`。
-2. 准备 OpenVPN 核心：
-   - 轻量方式：在 `gatepilot-windows-amd64.exe` 旁创建 `openvpn\` 目录，放入 `openvpn.exe` 和同版本配套 DLL；
-   - 或安装 OpenVPN Community，安装时保留虚拟网卡驱动。
+1. 从 GitHub Releases 下载 `gatepilot-<版本>-windows-amd64-portable.zip`。
+2. 解压后目录内已包含 `gatepilot.exe` 和 `openvpn\` 便携核心文件。仓库 `openvpn/` 目录也提供同一套 Windows OpenVPN 核心文件。
 3. 右键选择“以管理员身份运行”。Wintun 虚拟网卡需要管理员/SYSTEM 权限；非管理员运行时 OpenVPN 会报 `Wintun requires SYSTEM privileges`。
 4. 从终端输出打开管理地址，并在页面连接节点。
 5. 将需要走 VPN 的应用代理设置为 `127.0.0.1:7928`，协议使用 HTTP 或 SOCKS5。
@@ -66,7 +64,7 @@ OpenVPN 2.6 及以上在 Windows 上默认使用 Wintun 驱动，并把本地 HT
 
 ```powershell
 $env:OPENVPN_CMD='"D:\Tools\OpenVPN\bin\openvpn.exe"'
-.\gatepilot-windows-amd64.exe
+.\gatepilot.exe
 ```
 
 GatePilot 不会修改 Windows 全局默认路由；只有使用 GatePilot 本地代理的应用流量会进入 OpenVPN，避免管理页面和 OpenVPN 控制连接被隧道自身截断。
@@ -108,7 +106,7 @@ docker compose logs -f gatepilot
 
 Docker 镜像只包含 Linux 共享代码和 Linux OpenVPN，不包含 Windows OpenVPN 二进制。
 
-GitHub Actions 会自动执行测试，生成 Linux amd64/arm64、Windows amd64、macOS amd64/arm64 构建产物。推送 `v*` tag 时会创建 GitHub Release，并自动从 OpenVPN 官方下载 Windows 核心文件，打包成 Windows 便携版 zip：
+GitHub Actions 会自动执行测试，生成 Linux amd64/arm64、Windows amd64、macOS amd64/arm64 构建产物。推送 `v*` tag 时会创建 GitHub Release，并优先使用仓库内 `openvpn/` 核心文件打包 Windows 便携版 zip；仓库缺少核心文件时才会从 OpenVPN 官方下载：
 
 ```text
 gatepilot-<版本>-windows-amd64-portable.zip

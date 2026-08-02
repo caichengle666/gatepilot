@@ -37,13 +37,13 @@ logs/
 speed-result.png
 
 # ---- Windows 便携 OpenVPN 二进制 ----
-openvpn/
-openvpn.exe
-tapctl.exe
-libcrypto-3-x64.dll
-libssl-3-x64.dll
-libpkcs11-helper-1.dll
-vcruntime140.dll
+!openvpn/
+/openvpn.exe
+/tapctl.exe
+/libcrypto-3-x64.dll
+/libssl-3-x64.dll
+/libpkcs11-helper-1.dll
+/vcruntime140.dll
 
 # ---- IDE 和编辑器 ----
 .vscode/
