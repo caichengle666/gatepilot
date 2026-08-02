@@ -11,9 +11,11 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/caichengle666/gatepilot/internal/proxy"
@@ -31,8 +33,72 @@ type Application struct {
 	serverMu   sync.Mutex
 	sessionsMu sync.Mutex
 	sessions   map[string]time.Time
-	Operations sync.Mutex
+	Operations operationLock
 	speedTests sync.Mutex
+}
+
+var operationLockTimeout = 2 * time.Minute
+
+type operationLock struct {
+	mutex sync.Mutex
+	owner atomic.Int64
+}
+
+func (lock *operationLock) TryLock() bool {
+	if !lock.mutex.TryLock() {
+		return false
+	}
+	lock.owner.Store(int64(goroutineID()))
+	return true
+}
+
+func (lock *operationLock) Lock() {
+	lock.mutex.Lock()
+	lock.owner.Store(int64(goroutineID()))
+}
+
+func (lock *operationLock) Unlock() {
+	lock.owner.Store(0)
+	lock.mutex.Unlock()
+}
+
+func (lock *operationLock) unlockIfOwned() {
+	if lock.owner.CompareAndSwap(int64(goroutineID()), 0) {
+		lock.mutex.Unlock()
+	}
+}
+
+func (lock *operationLock) forceUnlockIfStale() bool {
+	return lock.forceUnlockIfStaleWithOwner(int64(goroutineID()))
+}
+
+func (lock *operationLock) forceUnlockIfStaleWithOwner(ownerID int64) bool {
+	for {
+		owner := lock.owner.Load()
+		if owner == 0 || time.Since(time.Unix(0, owner)) < operationLockTimeout {
+			return false
+		}
+		if lock.owner.CompareAndSwap(owner, ownerID) {
+			if owner != ownerID {
+				lock.mutex.Unlock()
+			}
+			return true
+		}
+	}
+}
+
+func goroutineID() int64 {
+	buffer := make([]byte, 64)
+	buffer = buffer[:runtime.Stack(buffer, false)]
+	fields := strings.Fields(strings.TrimPrefix(string(buffer), "goroutine "))
+	if len(fields) == 0 {
+		return 0
+	}
+	id, err := strconv.ParseInt(fields[0], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
 }
 
 // NewApplication 创建 Web 管理服务。
@@ -282,11 +348,15 @@ func (a *Application) handlePOST(writer http.ResponseWriter, request *http.Reque
 			return
 		}
 		if !a.Operations.TryLock() {
-			writeJSONResponse(writer, http.StatusConflict, map[string]any{"ok": false, "error": "当前已有连接或节点维护任务正在运行"})
-			return
+			if a.Operations.forceUnlockIfStale() {
+				a.Store.LogEvent("warning", "Web", "检测到节点维护锁超过 2 分钟未释放，已强制恢复")
+			} else {
+				writeJSONResponse(writer, http.StatusConflict, map[string]any{"ok": false, "error": "当前已有连接或节点维护任务正在运行"})
+				return
+			}
 		}
 		message, err := a.VPN.Connect(payload.ID)
-		a.Operations.Unlock()
+		a.Operations.unlockIfOwned()
 		writeOperationResult(writer, message, err)
 	case "/api/disconnect":
 		a.VPN.Stop("用户已断开连接")
@@ -297,7 +367,7 @@ func (a *Application) handlePOST(writer http.ResponseWriter, request *http.Reque
 			return
 		}
 		go func() {
-			defer a.Operations.Unlock()
+			defer a.Operations.unlockIfOwned()
 			_, _ = a.maintainLocked(context.Background(), true)
 		}()
 		writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true, "message": "已在后台启动节点更新流程", "running": false})
@@ -317,7 +387,7 @@ func (a *Application) handlePOST(writer http.ResponseWriter, request *http.Reque
 			return
 		}
 		updated, err := a.VPN.TestNode(payload.ID)
-		a.Operations.Unlock()
+		a.Operations.unlockIfOwned()
 		if updated.ID == "" {
 			writeOperationResult(writer, "", err)
 			return
@@ -336,7 +406,7 @@ func (a *Application) handlePOST(writer http.ResponseWriter, request *http.Reque
 			return
 		}
 		nodes := a.VPN.TestNodes(payload.IDs)
-		a.Operations.Unlock()
+		a.Operations.unlockIfOwned()
 		writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true, "nodes": nodes})
 	case "/api/toggle_favorite":
 		var payload struct {
@@ -364,7 +434,7 @@ func (a *Application) maintain(ctx context.Context, force bool) (string, error) 
 	if !a.Operations.TryLock() {
 		return "", errors.New("节点维护任务正在运行")
 	}
-	defer a.Operations.Unlock()
+	defer a.Operations.unlockIfOwned()
 	return a.maintainLocked(ctx, force)
 }
 

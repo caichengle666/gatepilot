@@ -77,7 +77,7 @@ func (a *Application) autoSwitch(attempt int) {
 			return
 		}
 		_, err := a.VPN.Connect(ui.FixedNodeID)
-		a.Operations.Unlock()
+		a.Operations.unlockIfOwned()
 		if err != nil {
 			a.Store.LogEvent("warning", "VPN", "固定节点重连失败: "+err.Error())
 		}
@@ -94,7 +94,7 @@ func (a *Application) autoSwitch(attempt int) {
 			return
 		}
 		_, err := a.VPN.Connect(candidate.ID)
-		a.Operations.Unlock()
+		a.Operations.unlockIfOwned()
 		if err == nil {
 			return
 		}

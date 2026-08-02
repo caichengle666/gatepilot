@@ -62,6 +62,8 @@ OpenVPN 2.6 及以上在 Windows 上默认使用 Wintun 驱动，并把本地 HT
 
 Windows 默认只允许一个 GatePilot 实例运行。重复启动会在创建 OpenVPN 进程前退出；如果 Web 管理端口或本地代理端口已被其他程序占用，也会直接提示端口冲突，不会额外创建 Wintun 网卡。
 
+如果节点维护或连接任务异常卡住超过 2 分钟，Web 手动连接会自动恢复该锁，避免页面一直提示“当前已有连接或节点维护任务正在运行”。
+
 如果 OpenVPN 安装在其他目录，使用 PowerShell 指定：
 
 ```powershell
