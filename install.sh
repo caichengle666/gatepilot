@@ -52,6 +52,137 @@ GITHUB_USER="${1:-caichengle666}"
 GITHUB_REPO="${2:-gatepilot}"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 GITHUB_URL="https://github.com/${GITHUB_USER}/${GITHUB_REPO}.git"
+AUTH_FILE="${INSTALL_DIR}/vpngate_data/ui_auth.json"
+FIRST_INSTALL=0
+if [ ! -f "$AUTH_FILE" ]; then
+    FIRST_INSTALL=1
+fi
+
+valid_port() {
+    [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+}
+
+wait_for_auth_file() {
+    local attempt
+    for attempt in $(seq 1 30); do
+        [ -f "$AUTH_FILE" ] && return 0
+        sleep 1
+    done
+    return 1
+}
+
+restart_gatepilot() {
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl restart gatepilot.service
+    elif command -v rc-service >/dev/null 2>&1; then
+        rc-service gatepilot restart
+    fi
+}
+
+configure_initial_settings() {
+    local current_username current_port current_proxy_port current_suffix
+    local username password confirm bind_choice host web_port proxy_port suffix
+    local proxy_auth_choice proxy_auth_enabled proxy_username proxy_password upstream_proxy temporary
+
+    [ -f "$AUTH_FILE" ] || return 0
+    current_username=$(jq -r '.username // empty' "$AUTH_FILE")
+    current_port=$(jq -r '.port // 8787' "$AUTH_FILE")
+    current_proxy_port=$(jq -r '.proxy_port // 7928' "$AUTH_FILE")
+    current_suffix=$(jq -r '.secret_path // empty' "$AUTH_FILE")
+
+    echo -e "${BLUE}首次安装配置向导${PLAIN}"
+    read -r -p "管理用户名 [${current_username}]: " username
+    username=${username:-$current_username}
+
+    while true; do
+        read -r -s -p "管理密码 [回车保留随机密码]: " password
+        echo
+        [ -z "$password" ] && break
+        read -r -s -p "再次输入管理密码: " confirm
+        echo
+        [ "$password" = "$confirm" ] && break
+        echo -e "${RED}两次密码不一致，请重新输入。${PLAIN}"
+    done
+
+    echo "1) 仅本机访问 (127.0.0.1)"
+    echo "2) 公网 IPv4 (0.0.0.0)"
+    echo "3) 公网 IPv4/IPv6 (::)"
+    read -r -p "Web 绑定方式 [1-3，默认2]: " bind_choice
+    case "${bind_choice:-2}" in
+        1) host="127.0.0.1" ;;
+        3) host="::" ;;
+        *) host="0.0.0.0" ;;
+    esac
+
+    read -r -p "Web 管理端口 [${current_port}]: " web_port
+    web_port=${web_port:-$current_port}
+    while ! valid_port "$web_port"; do
+        read -r -p "端口无效，请重新输入 Web 管理端口: " web_port
+    done
+
+    read -r -p "本地 HTTP/SOCKS5 代理端口 [${current_proxy_port}]: " proxy_port
+    proxy_port=${proxy_port:-$current_proxy_port}
+    while ! valid_port "$proxy_port" || [ "$proxy_port" = "$web_port" ]; do
+        read -r -p "端口无效或与 Web 端口冲突，请重新输入代理端口: " proxy_port
+    done
+
+    read -r -p "Web 安全路径 [${current_suffix}，输入 random 重新生成]: " suffix
+    suffix=${suffix:-$current_suffix}
+    if [ "$suffix" = "random" ]; then
+        suffix=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 12 || true)
+    fi
+    while [[ ! "$suffix" =~ ^[A-Za-z0-9]+$ ]]; do
+        read -r -p "安全路径只能包含字母和数字，请重新输入: " suffix
+    done
+
+    read -r -p "启用本地代理用户名密码认证？[y/N]: " proxy_auth_choice
+    proxy_auth_enabled=false
+    proxy_username=""
+    proxy_password=""
+    if [[ "$proxy_auth_choice" =~ ^[Yy]$ ]]; then
+        proxy_auth_enabled=true
+        while [ -z "$proxy_username" ]; do
+            read -r -p "代理用户名: " proxy_username
+        done
+        while [ -z "$proxy_password" ]; do
+            read -r -s -p "代理密码: " proxy_password
+            echo
+        done
+    fi
+
+    read -r -p "前置代理 [可留空，例如 socks5://127.0.0.1:1080]: " upstream_proxy
+    while [ -n "$upstream_proxy" ] && [[ ! "$upstream_proxy" =~ ^(http|https|socks|socks5):// ]]; do
+        read -r -p "前置代理协议无效，请重新输入或留空: " upstream_proxy
+    done
+
+    temporary=$(mktemp)
+    jq \
+        --arg username "$username" \
+        --arg password "$password" \
+        --arg host "$host" \
+        --arg suffix "$suffix" \
+        --arg upstream_proxy "$upstream_proxy" \
+        --arg proxy_username "$proxy_username" \
+        --arg proxy_password "$proxy_password" \
+        --argjson port "$web_port" \
+        --argjson proxy_port "$proxy_port" \
+        --argjson proxy_auth_enabled "$proxy_auth_enabled" '
+            .username = $username |
+            .password = (if $password == "" then .password else $password end) |
+            .host = $host |
+            .port = $port |
+            .proxy_port = $proxy_port |
+            .secret_path = $suffix |
+            .upstream_proxy = $upstream_proxy |
+            .proxy_auth_enabled = $proxy_auth_enabled |
+            .proxy_username = $proxy_username |
+            .proxy_password = (if $proxy_auth_enabled then $proxy_password else "" end)
+        ' "$AUTH_FILE" > "$temporary"
+    install -m 600 "$temporary" "$AUTH_FILE"
+    rm -f "$temporary"
+    restart_gatepilot
+    echo -e "${GREEN}首次安装配置已保存。${PLAIN}"
+}
 
 if [ -d "${INSTALL_DIR}/.git" ]; then
     if [ ! -f "${INSTALL_DIR}/.local_dev" ]; then
@@ -109,10 +240,15 @@ fi
 
 install -m 755 "$INSTALL_DIR/scripts/ml.sh" /usr/local/bin/ml
 
-sleep 2
-AUTH_FILE="${INSTALL_DIR}/vpngate_data/ui_auth.json"
+if ! wait_for_auth_file; then
+    echo -e "${YELLOW}服务已启动，但配置文件尚未生成，请稍后运行 ml 检查状态。${PLAIN}"
+fi
+if [ "$FIRST_INSTALL" = "1" ] && [ -t 0 ] && [ "${GATEPILOT_SKIP_WIZARD:-0}" != "1" ]; then
+    configure_initial_settings
+fi
+
 json_value() {
-    sed -n "s/.*\"$1\":[[:space:]]*\"\{0,1\}\([^\",]*\)\"\{0,1\}.*/\1/p" "$AUTH_FILE" 2>/dev/null | head -n1
+    jq -r --arg key "$1" '.[$key] // empty' "$AUTH_FILE" 2>/dev/null
 }
 PUBLIC_IP=$(curl -4 -s --max-time 3 https://api.ipify.org || echo "服务器IP")
 echo -e "${GREEN}安装完成。${PLAIN}"
