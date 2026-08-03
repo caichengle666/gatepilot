@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -43,13 +44,15 @@ func isElevated() bool {
 
 func ensureAdminElevation() {
 	arguments := os.Args[1:]
-	if hasFlag(arguments, noElevationFlag) || hasFlag(arguments, elevationFlag) || isElevated() {
+	if hasFlag(arguments, noElevationFlag) || isElevated() {
 		return
+	}
+	if hasFlag(arguments, elevationFlag) {
+		log.Fatal("GatePilot 已请求管理员权限，但新进程仍未获得管理员权限；请检查 UAC 或系统安全策略")
 	}
 	executable, err := os.Executable()
 	if err != nil {
-		log.Printf("自动管理员提权失败，无法获取可执行文件路径: %v", err)
-		return
+		log.Fatalf("自动管理员提权失败，无法获取可执行文件路径: %v", err)
 	}
 	arguments = append(arguments, elevationFlag)
 	parameters := strings.Join(quoteWindowsArguments(arguments), " ")
@@ -61,11 +64,11 @@ func ensureAdminElevation() {
 	shellExecute := shell32.NewProc("ShellExecuteW")
 	result, _, callErr := shellExecute.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(file)), uintptr(unsafe.Pointer(params)), uintptr(unsafe.Pointer(directory)), 1)
 	if result <= 32 {
-		log.Printf("自动管理员提权未成功（UAC 可能被取消，ShellExecute=%d）；OpenVPN Wintun 网口需要管理员权限。可使用 --no-elevate 禁止自动提权。", result)
+		message := fmt.Sprintf("自动管理员提权未成功（UAC 可能被取消，ShellExecute=%d）；GatePilot 无法创建 OpenVPN Wintun 网口", result)
 		if callErr != nil && callErr != syscall.Errno(0) {
-			log.Printf("ShellExecute 错误: %v", callErr)
+			message += ": " + callErr.Error()
 		}
-		return
+		log.Fatal(message)
 	}
 	log.Printf("已请求管理员权限并启动新进程，当前非管理员进程退出。")
 	os.Exit(0)

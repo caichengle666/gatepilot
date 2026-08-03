@@ -1506,6 +1506,20 @@ function updateCountryFilter() {
   
   if (countries.includes(selectedValue)) {
     select.value = selectedValue;
+  } else if (state.status === "error" && state.message) {
+    activeCardContainer.innerHTML = `
+      <div class="active-card" style="background: var(--bg-surface); border-color: var(--danger); box-shadow: 0 0 15px rgba(244, 63, 94, 0.12);">
+        <div class="active-card-info">
+          <div class="stat-icon-wrapper" style="background: rgba(244, 63, 94, 0.1); border-color: rgba(244, 63, 94, 0.25); width: 48px; height: 48px; border-radius: 8px;">
+            <svg xmlns="http://www.w3.org/2000/svg" class="stat-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" style="color: var(--danger); width: 24px; height: 24px;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M5.07 19h13.86c1.54 0 2.5-1.67 1.73-3L13.73 4c-.77-1.33-2.69-1.33-3.46 0L3.34 16c-.77 1.33.19 3 1.73 3z" /></svg>
+          </div>
+          <div class="active-card-details">
+            <div class="active-card-title" style="color: var(--danger);"><span class="badge unavailable">连接失败</span></div>
+            <div class="active-card-meta" style="margin-top: 6px; color: var(--text-primary);">${esc(state.message)}</div>
+          </div>
+        </div>
+      </div>
+    `;
   } else {
     select.value = "";
   }
@@ -1657,7 +1671,7 @@ function render(){
   if ($("target")) $("target").textContent = state.target_valid_nodes || 3;
   if ($("active")) $("active").textContent = activeNode ? 1 : 0; 
   
-  const statusMessage = state.last_check_message || "";
+  const statusMessage = state.status === "error" && state.message ? state.message : (state.last_check_message || "");
   const activeNodeInfo = activeNode ? `<span class="badge available" style="margin-left:8px; padding:2px 8px;">${esc(translateCountry(activeNode.country))} (${activeNode.id})</span>` : `<span class="badge unavailable" style="margin-left:8px; padding:2px 8px;">无</span>`;
   const localProxy = state.local_proxy || `http://127.0.0.1:${state.proxy_port || 7928}`;
   if ($("status")) { $("status").innerHTML=`<span class="status-dot"></span>HTTP 代理本地接口：${localProxy} | 活动节点：${activeNodeInfo} | 状态：${statusMessage}`; }
@@ -1760,9 +1774,10 @@ function render(){
       const testBtn = `<button class="test-btn" data-node-id="${esc(n.id)}" ${isTesting ? 'disabled' : ''} onclick="testNode(this, '${esc(n.id)}', event)">${testBtnText}</button>`;
       const protocol = String(n.proto || "unknown").toUpperCase();
       const protocolColor = protocol.startsWith("UDP") ? "var(--success)" : "var(--primary)";
+      const connectionBusy = state.is_connecting && !state.maintenance_running;
       const connectBtn = isCurrentlyActive 
         ? `<button class="connect-btn" disabled style="background: var(--success-gradient); color: white; cursor: default; opacity: 1;">已连接 ${esc(protocol)}</button>`
-        : `<button class="connect-btn" ${(isTesting || state.is_connecting) ? 'disabled style="opacity:0.3; cursor:not-allowed;"' : ''} onclick="connectNode('${esc(n.id)}')">连接 ${esc(protocol)}</button>`;
+        : `<button class="connect-btn" ${(isTesting || connectionBusy) ? 'disabled style="opacity:0.3; cursor:not-allowed;"' : ''} onclick="connectNode('${esc(n.id)}')">连接 ${esc(protocol)}</button>`;
       
       const favoriteIds = Array.isArray(state.favorite_node_ids) ? state.favorite_node_ids : [];
       const isFav = favoriteIds.includes(n.id);

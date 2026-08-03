@@ -204,7 +204,8 @@ func cleanupStaleVPNState(openVPNCommand string) {
 }
 
 func isBundledOpenVPNExecutable(applicationExecutable, openVPNExecutable string) bool {
-	applicationDirectory, err := filepath.Abs(filepath.Dir(applicationExecutable))
+	expected := filepath.Join(filepath.Dir(applicationExecutable), "openvpn", "openvpn.exe")
+	expectedPath, err := filepath.Abs(expected)
 	if err != nil {
 		return false
 	}
@@ -212,12 +213,7 @@ func isBundledOpenVPNExecutable(applicationExecutable, openVPNExecutable string)
 	if err != nil {
 		return false
 	}
-	relative, err := filepath.Rel(applicationDirectory, openVPNPath)
-	if err != nil {
-		return false
-	}
-	parts := strings.Split(filepath.Clean(relative), string(filepath.Separator))
-	return len(parts) >= 2 && strings.EqualFold(parts[0], "openvpn")
+	return strings.EqualFold(filepath.Clean(expectedPath), filepath.Clean(openVPNPath))
 }
 
 func isVPNGateIPv4(ip net.IP) bool {

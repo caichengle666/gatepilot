@@ -10,8 +10,12 @@ func openVPNDeviceArguments(device string, _ float64, _ string) []string {
 	return []string{"--dev", device, "--dev-type", "tun"}
 }
 
-func openVPNDriverCandidates(_ float64) []string {
+func openVPNDriverCandidates(_ float64, _ bool) []string {
 	return []string{""}
+}
+
+func openVPNUsesBundledCore(_ string) bool {
+	return false
 }
 
 func shouldRetryOpenVPNDriver(_ error) bool {

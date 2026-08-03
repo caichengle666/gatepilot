@@ -3,6 +3,7 @@ package web
 import (
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestOperationLockUnlockIfOwned(t *testing.T) {
@@ -51,6 +52,32 @@ func TestOperationLockConcurrentOwnership(t *testing.T) {
 	waitGroup.Wait()
 	if !lock.TryLock() {
 		t.Fatal("expected lock to be free after concurrent use")
+	}
+	lock.Unlock()
+}
+
+func TestOperationLockTryLockForWaitsForRelease(t *testing.T) {
+	var lock operationLock
+	if !lock.TryLock() {
+		t.Fatal("expected fresh lock to be acquirable")
+	}
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		lock.Unlock()
+	}()
+	if !lock.TryLockFor(time.Second) {
+		t.Fatal("expected timed lock to acquire after maintenance releases it")
+	}
+	lock.Unlock()
+}
+
+func TestOperationLockTryLockForTimesOut(t *testing.T) {
+	var lock operationLock
+	if !lock.TryLock() {
+		t.Fatal("expected fresh lock to be acquirable")
+	}
+	if lock.TryLockFor(100 * time.Millisecond) {
+		t.Fatal("expected timed lock to fail while lock stays held")
 	}
 	lock.Unlock()
 }

@@ -38,3 +38,14 @@ func TestValidateOpenVPNServiceArgumentsRequiresWintun(t *testing.T) {
 		t.Fatal("SYSTEM service is only intended for the Wintun primary path")
 	}
 }
+
+func TestArgumentValue(t *testing.T) {
+	arguments := []string{openVPNServiceFlag, openVPNServiceDataDirFlag, `D:\GatePilot Data`}
+	value, ok := argumentValue(arguments, openVPNServiceDataDirFlag)
+	if !ok || value != `D:\GatePilot Data` {
+		t.Fatalf("argument value = %q, %v", value, ok)
+	}
+	if _, ok := argumentValue(arguments, "--missing"); ok {
+		t.Fatal("missing argument should not return a value")
+	}
+}

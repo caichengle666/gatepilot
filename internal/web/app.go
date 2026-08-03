@@ -24,18 +24,20 @@ import (
 
 // Application 是 Web 管理服务。
 type Application struct {
-	Store      *store.Store
-	VPN        *vpn.Controller
-	Proxy      *proxy.Server
-	startedAt  time.Time
-	server     *http.Server
-	serverMu   sync.Mutex
-	sessionsMu sync.Mutex
-	sessions   map[string]time.Time
-	loginMu    sync.Mutex
-	logins     map[string]loginFailure
-	Operations operationLock
-	speedTests sync.Mutex
+	Store             *store.Store
+	VPN               *vpn.Controller
+	Proxy             *proxy.Server
+	startedAt         time.Time
+	server            *http.Server
+	serverMu          sync.Mutex
+	sessionsMu        sync.Mutex
+	sessions          map[string]time.Time
+	loginMu           sync.Mutex
+	logins            map[string]loginFailure
+	Operations        operationLock
+	speedTests        sync.Mutex
+	maintenanceMu     sync.Mutex
+	maintenanceCancel context.CancelFunc
 }
 
 type loginFailure struct {
@@ -51,6 +53,19 @@ func (lock *operationLock) TryLock() bool {
 	return lock.mutex.TryLock()
 }
 
+func (lock *operationLock) TryLockFor(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if lock.TryLock() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func (lock *operationLock) Lock() {
 	lock.mutex.Lock()
 }
@@ -61,6 +76,27 @@ func (lock *operationLock) Unlock() {
 
 func (lock *operationLock) unlockIfOwned() {
 	lock.mutex.Unlock()
+}
+
+func (a *Application) setMaintenanceCancel(cancel context.CancelFunc) {
+	a.maintenanceMu.Lock()
+	a.maintenanceCancel = cancel
+	a.maintenanceMu.Unlock()
+}
+
+func (a *Application) clearMaintenanceCancel() {
+	a.maintenanceMu.Lock()
+	a.maintenanceCancel = nil
+	a.maintenanceMu.Unlock()
+}
+
+func (a *Application) cancelMaintenance() {
+	a.maintenanceMu.Lock()
+	cancel := a.maintenanceCancel
+	a.maintenanceMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // NewApplication 创建 Web 管理服务。
@@ -355,7 +391,8 @@ func (a *Application) handlePOST(writer http.ResponseWriter, request *http.Reque
 			writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": "节点 ID 不能为空"})
 			return
 		}
-		if !a.Operations.TryLock() {
+		a.cancelMaintenance()
+		if !a.Operations.TryLockFor(8 * time.Second) {
 			writeJSONResponse(writer, http.StatusConflict, map[string]any{"ok": false, "error": "当前已有连接或节点维护任务正在运行"})
 			return
 		}
@@ -370,9 +407,13 @@ func (a *Application) handlePOST(writer http.ResponseWriter, request *http.Reque
 			writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true, "message": "节点维护任务正在运行，请稍后再试", "running": true})
 			return
 		}
+		ctx, cancel := context.WithCancel(context.Background())
+		a.setMaintenanceCancel(cancel)
 		go func() {
 			defer a.Operations.unlockIfOwned()
-			_, _ = a.maintainLocked(context.Background(), true)
+			defer cancel()
+			defer a.clearMaintenanceCancel()
+			_, _ = a.maintainLocked(ctx, true)
 		}()
 		writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true, "message": "已在后台启动节点更新流程", "running": false})
 	case "/api/check":
@@ -444,7 +485,11 @@ func (a *Application) maintain(ctx context.Context, force bool) (string, error) 
 	if !a.Operations.TryLock() {
 		return "", errors.New("节点维护任务正在运行")
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	a.setMaintenanceCancel(cancel)
 	defer a.Operations.unlockIfOwned()
+	defer cancel()
+	defer a.clearMaintenanceCancel()
 	return a.maintainLocked(ctx, force)
 }
 
@@ -479,7 +524,10 @@ func (a *Application) maintainLocked(ctx context.Context, force bool) (string, e
 			ids = append(ids, candidate.ID)
 		}
 	}
-	tested := a.VPN.TestNodes(ids)
+	tested := a.VPN.TestNodesContext(ctx, ids)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	valid = 0
 	for _, candidate := range a.Store.Candidates() {
 		if candidate.ProbeStatus == "available" {
@@ -494,14 +542,22 @@ func (a *Application) maintainLocked(ctx context.Context, force bool) (string, e
 	ui, _, _ := a.Store.Snapshot()
 	if ui.ConnectionEnabled && !a.VPN.Running() {
 		if ui.RoutingMode == "fixed_ip" && ui.FixedNodeID != "" {
-			return a.VPN.Connect(ui.FixedNodeID)
+			return a.VPN.ConnectContext(ctx, ui.FixedNodeID)
 		}
+		attempts := 0
 		for _, candidate := range a.Store.Candidates() {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
 			if candidate.ProbeStatus != "available" {
 				continue
 			}
-			if message, err := a.VPN.Connect(candidate.ID); err == nil {
+			attempts++
+			if message, err := a.VPN.ConnectContext(ctx, candidate.ID); err == nil {
 				return message, nil
+			}
+			if attempts >= 3 {
+				break
 			}
 		}
 	}

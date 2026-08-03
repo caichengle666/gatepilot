@@ -2,6 +2,7 @@ package vpn
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -264,16 +265,28 @@ func (c *Controller) prepareConfig(candidate store.Node, suffix string) (string,
 	return path, nil
 }
 
-func (c *Controller) runUntilReady(candidate store.Node, device string, timeout time.Duration, routeNopull bool) (*openVPNRun, error) {
-	drivers := openVPNDriverCandidates(c.openVPNVersion())
+func (c *Controller) runUntilReady(ctx context.Context, candidate store.Node, device string, timeout time.Duration, routeNopull bool) (*openVPNRun, error) {
+	drivers := openVPNDriverCandidates(c.openVPNVersion(), openVPNUsesBundledCore(c.application.Config.OpenVPNCommand))
 	var lastError error
 	for index, driver := range drivers {
 		if driver == "tap-windows6" {
+			message := "Wintun 不可用，正在安装或准备 TAP-Windows6 备用驱动"
+			_ = c.application.SetState("connecting", message, "")
+			_ = c.application.UpdateState(func(state *store.RuntimeState) { state.LastCheckMessage = message })
+			c.application.LogEvent("warning", "OpenVPN", message)
 			if tapErr := ensureTAPAdapter(c.application.Config.OpenVPNCommand); tapErr != nil {
-				c.application.LogEvent("warning", "OpenVPN", "自动创建 TAP 网卡失败: "+tapErr.Error())
+				failure := &openVPNFailure{code: "ERR_VPN_DRIVER", message: "TAP 备用驱动准备失败: " + tapErr.Error(), cause: tapErr}
+				_ = c.application.SetState("error", failure.Error(), "")
+				_ = c.application.UpdateState(func(state *store.RuntimeState) { state.LastCheckMessage = failure.Error() })
+				c.application.LogEvent("error", "OpenVPN", failure.Error())
+				return nil, failure
 			}
+			message = "TAP-Windows6 备用驱动已准备完成，正在重新连接"
+			_ = c.application.SetState("connecting", message, "")
+			_ = c.application.UpdateState(func(state *store.RuntimeState) { state.LastCheckMessage = message })
+			c.application.LogEvent("info", "OpenVPN", message)
 		}
-		run, err := c.runUntilReadyWithDriver(candidate, device, driver, timeout, routeNopull)
+		run, err := c.runUntilReadyWithDriver(ctx, candidate, device, driver, timeout, routeNopull)
 		if err == nil {
 			return run, nil
 		}
@@ -286,7 +299,7 @@ func (c *Controller) runUntilReady(candidate store.Node, device string, timeout 
 	return nil, lastError
 }
 
-func (c *Controller) runUntilReadyWithDriver(candidate store.Node, device, windowsDriver string, timeout time.Duration, routeNopull bool) (*openVPNRun, error) {
+func (c *Controller) runUntilReadyWithDriver(ctx context.Context, candidate store.Node, device, windowsDriver string, timeout time.Duration, routeNopull bool) (*openVPNRun, error) {
 	ready := false
 	defer func() {
 		if !ready {
@@ -350,6 +363,9 @@ func (c *Controller) runUntilReadyWithDriver(candidate store.Node, device, windo
 			}
 		case waitErr := <-done:
 			return nil, c.openVPNError(waitErr, tail)
+		case <-ctx.Done():
+			stopCommandAndWait(process, done)
+			return nil, ctx.Err()
 		case <-timer.C:
 			stopCommandAndWait(process, done)
 			return nil, c.openVPNError(errors.New("OpenVPN 连接超时"), tail)
@@ -374,6 +390,10 @@ func (c *Controller) updateHandshakeStatus(line string) {
 }
 
 func (c *Controller) openVPNError(cause error, tail []string) error {
+	var failure *openVPNFailure
+	if errors.As(cause, &failure) {
+		return failure
+	}
 	output := strings.Join(tail, "\n")
 	code, message := store.DiagnoseOpenVPNFailure(output, cause)
 	if cause != nil && !strings.Contains(message, cause.Error()) {
@@ -397,6 +417,11 @@ func shouldBlacklistOpenVPNFailure(err error) bool {
 
 // Connect 连接到指定节点。
 func (c *Controller) Connect(nodeID string) (string, error) {
+	return c.ConnectContext(context.Background(), nodeID)
+}
+
+// ConnectContext 连接到指定节点，并允许后台自动连接被手动操作取消。
+func (c *Controller) ConnectContext(ctx context.Context, nodeID string) (string, error) {
 	candidate, found := c.application.NodeByID(nodeID)
 	if !found {
 		return "", fmt.Errorf("找不到节点 %s", nodeID)
@@ -412,7 +437,7 @@ func (c *Controller) Connect(nodeID string) (string, error) {
 		state.LastCheckMessage = "正在连接节点 " + candidate.ID
 		state.ActiveNodeLatency = "测试中..."
 	})
-	run, err := c.runUntilReady(candidate, "tun0", c.application.Config.OpenVPNTimeout, false)
+	run, err := c.runUntilReady(ctx, candidate, "tun0", c.application.Config.OpenVPNTimeout, false)
 	if err != nil {
 		if shouldBlacklistOpenVPNFailure(err) {
 			c.application.MarkBlacklisted(candidate, err.Error())
@@ -476,6 +501,11 @@ func (c *Controller) ValidateCandidate(candidate store.Node) error {
 
 // TestNode 测试单个节点的连通性。
 func (c *Controller) TestNode(nodeID string) (store.Node, error) {
+	return c.TestNodeContext(context.Background(), nodeID)
+}
+
+// TestNodeContext 测试单个节点，并允许后台维护被手动连接取消。
+func (c *Controller) TestNodeContext(ctx context.Context, nodeID string) (store.Node, error) {
 	candidate, found := c.application.NodeByID(nodeID)
 	if !found {
 		return store.Node{}, fmt.Errorf("找不到节点 %s", nodeID)
@@ -489,7 +519,12 @@ func (c *Controller) TestNode(nodeID string) (store.Node, error) {
 	device := fmt.Sprintf("tun_test%d", c.testIndex)
 	c.mu.Unlock()
 	started := time.Now()
-	run, err := c.runUntilReady(candidate, device, minDuration(c.application.Config.OpenVPNTimeout, 12*time.Second), true)
+	run, err := c.runUntilReady(ctx, candidate, device, minDuration(c.application.Config.OpenVPNTimeout, 12*time.Second), true)
+	if errors.Is(err, context.Canceled) {
+		c.application.UpdateNodeProbe(candidate.ID, false, 0, "后台检测已取消")
+		updated, _ := c.application.NodeByID(candidate.ID)
+		return updated, err
+	}
 	latency := MeasureNodeLatency(candidate, 5*time.Second)
 	if err != nil {
 		c.application.UpdateNodeProbe(candidate.ID, false, latency, err.Error())
@@ -515,6 +550,11 @@ func (c *Controller) TestNode(nodeID string) (store.Node, error) {
 
 // TestNodes 批量测试节点。
 func (c *Controller) TestNodes(ids []string) []store.Node {
+	return c.TestNodesContext(context.Background(), ids)
+}
+
+// TestNodesContext 批量测试节点，并在上下文取消后停止未开始和正在进行的测试。
+func (c *Controller) TestNodesContext(ctx context.Context, ids []string) []store.Node {
 	limit := c.application.Config.ManualTestNodeLimit
 	if len(ids) > limit {
 		ids = ids[:limit]
@@ -527,9 +567,13 @@ func (c *Controller) TestNodes(ids []string) []store.Node {
 		waitGroup.Add(1)
 		go func(index int, id string) {
 			defer waitGroup.Done()
-			semaphore <- struct{}{}
+			select {
+			case semaphore <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
 			defer func() { <-semaphore }()
-			results[index], _ = c.TestNode(id)
+			results[index], _ = c.TestNodeContext(ctx, id)
 		}(index, id)
 	}
 	waitGroup.Wait()

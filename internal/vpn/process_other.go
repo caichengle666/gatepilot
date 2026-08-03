@@ -14,3 +14,7 @@ func startOpenVPNProcess(command *exec.Cmd, _ string) (io.ReadCloser, managedOpe
 func RunWindowsOpenVPNService(_ []string) bool {
 	return false
 }
+
+func PrepareWindowsOpenVPNService(_ string) (bool, error) {
+	return false, nil
+}

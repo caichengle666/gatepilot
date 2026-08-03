@@ -26,9 +26,13 @@ func TestOpenVPNDeviceArgumentsWindows(t *testing.T) {
 }
 
 func TestOpenVPNDriverCandidatesWindows(t *testing.T) {
-	want := []string{"wintun", "tap-windows6", "ovpn-dco"}
-	if got := openVPNDriverCandidates(2.6); !reflect.DeepEqual(got, want) {
+	want := []string{"wintun", "tap-windows6"}
+	if got := openVPNDriverCandidates(2.6, true); !reflect.DeepEqual(got, want) {
 		t.Fatalf("driver candidates = %v, want %v", got, want)
+	}
+	want = []string{"tap-windows6"}
+	if got := openVPNDriverCandidates(2.6, false); !reflect.DeepEqual(got, want) {
+		t.Fatalf("external driver candidates = %v, want %v", got, want)
 	}
 	if !shouldRetryOpenVPNDriver(&openVPNFailure{code: "ERR_VPN_DRIVER"}) {
 		t.Fatal("driver failures should trigger fallback")

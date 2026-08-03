@@ -50,11 +50,24 @@ func main() {
 	proxy.EnsureGeoFiles()
 	initSplitRouting(application, ui)
 	if ok, message := store.OpenVPNStatus(application.Config.OpenVPNCommand); ok {
-		_ = application.UpdateState(func(state *store.RuntimeState) {
-			state.OpenVPNOK = true
-			state.OpenVPNMessage = ""
-		})
-		log.Printf("OpenVPN 核心检测正常: %s", application.Config.OpenVPNCommand)
+		prepared, prepareErr := vpn.PrepareWindowsOpenVPNService(application.Config.OpenVPNCommand)
+		if prepareErr != nil {
+			message = "Windows OpenVPN SYSTEM 服务安装或修复失败: " + prepareErr.Error()
+			_ = application.UpdateState(func(state *store.RuntimeState) {
+				state.OpenVPNOK = false
+				state.OpenVPNMessage = message
+			})
+			log.Printf("OpenVPN 核心不可用: %s", message)
+		} else {
+			_ = application.UpdateState(func(state *store.RuntimeState) {
+				state.OpenVPNOK = true
+				state.OpenVPNMessage = ""
+			})
+			log.Printf("OpenVPN 核心检测正常: %s", application.Config.OpenVPNCommand)
+			if prepared {
+				log.Printf("Windows OpenVPN SYSTEM 服务已安装或修复完成")
+			}
+		}
 	} else {
 		_ = application.UpdateState(func(state *store.RuntimeState) {
 			state.OpenVPNOK = false

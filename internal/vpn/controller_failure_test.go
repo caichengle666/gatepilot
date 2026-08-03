@@ -51,6 +51,18 @@ func TestOpenVPNErrorMissingExecutable(t *testing.T) {
 	}
 }
 
+func TestOpenVPNErrorPreservesDriverFailure(t *testing.T) {
+	controller := &Controller{}
+	original := &openVPNFailure{code: "ERR_VPN_PERMISSION", message: "service unavailable"}
+	err := controller.openVPNError(original, nil)
+	if err != original {
+		t.Fatalf("typed OpenVPN failure was wrapped: %v", err)
+	}
+	if !shouldRetryOpenVPNDriver(err) {
+		t.Fatal("permission failure should allow fallback to the next Windows driver")
+	}
+}
+
 func TestOpenVPNErrorEnvironmentFailuresDoNotBlacklist(t *testing.T) {
 	controller := &Controller{}
 	for _, tail := range [][]string{

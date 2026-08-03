@@ -29,3 +29,13 @@ func TestOpenVPNStatusMissingCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitOpenVPNCommandPreservesWindowsBackslashes(t *testing.T) {
+	parts, err := splitOpenVPNCommand(`"D:\Tools\OpenVPN\bin\openvpn.exe" --version`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 2 || parts[0] != `D:\Tools\OpenVPN\bin\openvpn.exe` || parts[1] != "--version" {
+		t.Fatalf("unexpected command parts: %#v", parts)
+	}
+}

@@ -47,23 +47,22 @@ Windows 原生模式支持 OpenVPN 2.4 及以上版本。GatePilot 会按以下�
 
 1. `OPENVPN_CMD` 指定的命令或完整路径；
 2. GatePilot 可执行文件旁的 `openvpn\openvpn.exe` 便携核心目录；
-3. GatePilot 可执行文件旁的 `openvpn.exe`；
-4. `C:\Program Files\OpenVPN\bin\openvpn.exe`；
-5. `PATH` 中的 `openvpn.exe`。
+3. `C:\Program Files\OpenVPN\bin\openvpn.exe`；
+4. `PATH` 中的 `openvpn.exe`。
 
-OpenVPN 2.6 及以上在 Windows 上默认使用 Wintun 驱动。GatePilot 首次连接时会自动安装按需启动的 `GatePilotOpenVPN` Windows 服务，由 LocalSystem 运行内置 OpenVPN 核心；网页和代理进程仍以普通管理员权限运行。
+OpenVPN 2.6 及以上在 Windows 上默认使用 Wintun 驱动。GatePilot 启动时会自动安装或修复按需启动的 `GatePilotOpenVPN` Windows 服务，由 LocalSystem 运行内置 OpenVPN 核心；网页和代理进程仍以管理员权限运行。
 
 ## Windows 运行
 
 1. 从 GitHub Releases 下载 `gatepilot-<版本>-windows-amd64-portable.zip`。
-2. 解压后目录内已包含 `gatepilot.exe` 和 `openvpn\` 便携核心文件。仓库 `openvpn/` 目录也提供同一套 Windows OpenVPN 核心文件。
+2. 解压后目录内已包含 `gatepilot.exe` 和 `openvpn\` 便携核心文件。仓库 `openvpn/` 目录也提供同一套 Windows OpenVPN 核心文件；不要只把 `openvpn.exe` 单独改名或移动，否则 GatePilot 不会把它当作便携核心。
 3. 双击 `gatepilot.exe` 并接受首次 UAC 提权。GatePilot 会自动安装 LocalSystem OpenVPN 服务，不需要手工安装虚拟网卡。
 4. 从终端输出打开管理地址，并在页面连接节点。
 5. 将需要走 VPN 的应用代理设置为 `127.0.0.1:7928`，协议使用 HTTP 或 SOCKS5。
 
 Windows 默认只允许一个 GatePilot 实例运行。重复启动会在创建 OpenVPN 进程前退出；如果 Web 管理端口或本地代理端口已被其他程序占用，也会直接提示端口冲突，不会额外创建 Wintun 网卡。
 
-Windows 驱动顺序为：LocalSystem 服务中的 Wintun、TAP-Windows6、OpenVPN DCO。Wintun 服务安装或启动失败时，GatePilot 会自动安装随包提供的 TAP 驱动并回退连接，不需要用户切换配置。
+Windows 驱动顺序为：便携核心使用 LocalSystem 服务中的 Wintun，失败后自动准备并回退到 TAP-Windows6；外部 OpenVPN 直接使用 TAP-Windows6。GatePilot 不默认尝试 OpenVPN DCO，避免额外的驱动兼容问题。TAP 驱动安装可能受到 Windows 驱动签名策略阻止，失败时 Web 页面会显示具体错误。
 
 如果节点维护或连接任务异常卡住超过 2 分钟，Web 手动连接会自动恢复该锁，避免页面一直提示“当前已有连接或节点维护任务正在运行”。
 

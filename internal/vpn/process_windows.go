@@ -22,8 +22,9 @@ import (
 )
 
 const (
-	openVPNServiceName = "GatePilotOpenVPN"
-	openVPNServiceFlag = "--openvpn-service"
+	openVPNServiceName        = "GatePilotOpenVPN"
+	openVPNServiceFlag        = "--openvpn-service"
+	openVPNServiceDataDirFlag = "--openvpn-data-dir"
 )
 
 type openVPNServiceRequest struct {
@@ -169,6 +170,9 @@ func RunWindowsOpenVPNService(arguments []string) bool {
 	if !containsArgument(arguments, openVPNServiceFlag) {
 		return false
 	}
+	if dataDir, ok := argumentValue(arguments, openVPNServiceDataDirFlag); ok {
+		_ = os.Setenv("VPNGATE_DATA_DIR", dataDir)
+	}
 	if err := svc.Run(openVPNServiceName, &openVPNServiceHandler{}); err != nil {
 		_, _, logPath, pathErr := openVPNServicePaths()
 		if pathErr == nil {
@@ -309,6 +313,11 @@ func ensureOpenVPNServiceInstalled() error {
 	if err != nil {
 		return err
 	}
+	dataDir, _, _, err := openVPNServicePaths()
+	if err != nil {
+		return err
+	}
+	serviceArguments := []string{openVPNServiceFlag, openVPNServiceDataDirFlag, dataDir}
 	manager, err := mgr.Connect()
 	if err != nil {
 		return err
@@ -322,7 +331,7 @@ func ensureOpenVPNServiceInstalled() error {
 			ErrorControl: mgr.ErrorNormal,
 			DisplayName:  "GatePilot OpenVPN SYSTEM Service",
 			Description:  "Runs the bundled OpenVPN core as LocalSystem so the Wintun driver can be used.",
-		}, openVPNServiceFlag)
+		}, serviceArguments...)
 	}
 	if err != nil {
 		return err
@@ -332,7 +341,7 @@ func ensureOpenVPNServiceInstalled() error {
 	if err != nil {
 		return err
 	}
-	expectedPath := quoteWindowsServiceArgument(executable) + " " + openVPNServiceFlag
+	expectedPath := quoteWindowsServiceArgument(executable) + " " + openVPNServiceFlag + " " + openVPNServiceDataDirFlag + " " + quoteWindowsServiceArgument(dataDir)
 	if !strings.EqualFold(strings.TrimSpace(config.BinaryPathName), expectedPath) || !strings.EqualFold(config.ServiceStartName, "LocalSystem") {
 		config.BinaryPathName = expectedPath
 		config.StartType = mgr.StartManual
@@ -348,6 +357,29 @@ func ensureOpenVPNServiceInstalled() error {
 	return nil
 }
 
+// PrepareWindowsOpenVPNService 在启动时预安装或修复便携版 OpenVPN SYSTEM 服务。
+func PrepareWindowsOpenVPNService(openVPNCommand string) (bool, error) {
+	parts, err := splitCommandLine(openVPNCommand)
+	if err != nil || len(parts) == 0 {
+		return false, errors.New("无法解析 OpenVPN 命令")
+	}
+	openVPNExecutable, err := exec.LookPath(parts[0])
+	if err != nil {
+		return false, err
+	}
+	applicationExecutable, err := os.Executable()
+	if err != nil {
+		return false, err
+	}
+	if !isBundledOpenVPNExecutable(applicationExecutable, openVPNExecutable) {
+		return false, nil
+	}
+	if err := ensureOpenVPNServiceInstalled(); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
 func openVPNServicePaths() (string, string, string, error) {
 	root := os.Getenv("VPNGATE_DATA_DIR")
 	if strings.TrimSpace(root) == "" {
@@ -359,8 +391,6 @@ func openVPNServicePaths() (string, string, string, error) {
 	}
 	return root, filepath.Join(root, "openvpn-service-request.json"), filepath.Join(root, "openvpn-service.log"), nil
 }
-
-
 
 var wintunHeldAdapter uintptr
 var wintunHeldDLL *windows.DLL
@@ -495,6 +525,15 @@ func containsArgument(arguments []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func argumentValue(arguments []string, target string) (string, bool) {
+	for index, argument := range arguments {
+		if argument == target && index+1 < len(arguments) {
+			return arguments[index+1], true
+		}
+	}
+	return "", false
 }
 
 func sameWindowsPath(left, right string) bool {

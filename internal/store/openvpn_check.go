@@ -14,8 +14,12 @@ func OpenVPNStatus(command string) (ok bool, message string) {
 	if err != nil || len(parts) == 0 {
 		return false, openVPNInstallHint("OPENVPN_CMD 配置无效，请重新指定 OpenVPN 可执行文件路径。")
 	}
-	if _, err := exec.LookPath(parts[0]); err != nil {
+	executable, err := exec.LookPath(parts[0])
+	if err != nil {
 		return false, openVPNInstallHint("找不到 OpenVPN 核心程序。")
+	}
+	if ok, message := platformOpenVPNStatus(executable); !ok {
+		return false, openVPNInstallHint(message)
 	}
 	checkCommand := exec.Command(parts[0], append(parts[1:], "--version")...)
 	checkCommand.WaitDelay = 5 * time.Second
@@ -50,7 +54,8 @@ func splitOpenVPNCommand(value string) ([]string, error) {
 			tokenStarted = false
 		}
 	}
-	for _, character := range strings.TrimSpace(value) {
+	characters := []rune(strings.TrimSpace(value))
+	for index, character := range characters {
 		if escaped {
 			current.WriteRune(character)
 			tokenStarted = true
@@ -58,7 +63,7 @@ func splitOpenVPNCommand(value string) ([]string, error) {
 			continue
 		}
 		switch {
-		case character == '\\':
+		case character == '\\' && index+1 < len(characters) && (characters[index+1] == ' ' || characters[index+1] == '\t' || characters[index+1] == '\'' || characters[index+1] == '"'):
 			escaped = true
 			tokenStarted = true
 		case quote != 0:

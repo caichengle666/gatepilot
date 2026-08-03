@@ -21,7 +21,6 @@ func defaultOpenVPNCommand(executable string, programFiles []string) string {
 		root := filepath.Dir(executable)
 		paths = append(paths,
 			filepath.Join(root, "openvpn", "openvpn.exe"),
-			filepath.Join(root, "openvpn.exe"),
 		)
 	}
 	for _, root := range programFiles {
