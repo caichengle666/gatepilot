@@ -385,10 +385,15 @@ func (a *Application) handlePOST(writer http.ResponseWriter, request *http.Reque
 		writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true})
 	case "/api/connect":
 		var payload struct {
-			ID string `json:"id"`
+			ID       string `json:"id"`
+			Protocol string `json:"protocol"`
 		}
 		if err := decodeJSON(request, &payload); err != nil || payload.ID == "" {
 			writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": "节点 ID 不能为空"})
+			return
+		}
+		if err := validateConnectProtocol(a.Store, payload.ID, payload.Protocol); err != nil {
+			writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}
 		a.cancelMaintenance()
@@ -479,6 +484,24 @@ func (a *Application) handlePOST(writer http.ResponseWriter, request *http.Reque
 	default:
 		http.NotFound(writer, request)
 	}
+}
+
+func validateConnectProtocol(application *store.Store, nodeID, requested string) error {
+	requested = strings.ToLower(strings.TrimSpace(requested))
+	if requested == "" {
+		return nil
+	}
+	if requested != "tcp" && requested != "udp" {
+		return fmt.Errorf("不支持的连接协议 %q", requested)
+	}
+	candidate, found := application.NodeByID(nodeID)
+	if !found {
+		return fmt.Errorf("找不到节点 %s", nodeID)
+	}
+	if !strings.HasPrefix(strings.ToLower(candidate.Protocol), requested) {
+		return fmt.Errorf("节点 %s 不是 %s 节点", nodeID, strings.ToUpper(requested))
+	}
+	return nil
 }
 
 func (a *Application) maintain(ctx context.Context, force bool) (string, error) {

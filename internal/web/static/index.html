@@ -531,6 +531,16 @@
       cursor: not-allowed;
     }
 
+    .udp-connect-btn {
+      color: #34d399;
+      border-color: rgba(16, 185, 129, 0.45);
+    }
+
+    .udp-connect-btn:hover:not(:disabled) {
+      background: var(--success-gradient);
+      box-shadow: 0 4px 10px rgba(16, 185, 129, 0.3);
+    }
+
     .test-btn {
       background: transparent;
       color: #34d399;
@@ -1012,9 +1022,10 @@
             <th>物理位置</th>
             <th>运营主体 / ISP</th>
             <th style="width: 80px;">协议</th>
+            <th style="width: 120px;">官方带宽</th>
             <th style="width: 110px;">IP 类型</th>
             <th style="width: 150px;">节点延迟</th>
-            <th style="width: 180px;">操作</th>
+            <th style="width: 210px;">操作</th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
@@ -1755,7 +1766,7 @@ function render(){
 
   // Render table rows
   if (currentPageNodes.length === 0) {
-    $("rows").innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-secondary); padding: 40px 0;">未找到符合过滤条件的备选节点。</td></tr>`;
+    $("rows").innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--text-secondary); padding: 40px 0;">未找到符合过滤条件的备选节点。</td></tr>`;
   } else {
     $("rows").innerHTML=currentPageNodes.map(n=>{
       if (!n) return '';
@@ -1774,10 +1785,13 @@ function render(){
       const testBtn = `<button class="test-btn" data-node-id="${esc(n.id)}" ${isTesting ? 'disabled' : ''} onclick="testNode(this, '${esc(n.id)}', event)">${testBtnText}</button>`;
       const protocol = String(n.proto || "unknown").toUpperCase();
       const protocolColor = protocol.startsWith("UDP") ? "var(--success)" : "var(--primary)";
+      const requestedProtocol = protocol.startsWith("UDP") ? "udp" : (protocol.startsWith("TCP") ? "tcp" : "");
+      const connectLabel = requestedProtocol === "udp" ? "UDP 连接" : (requestedProtocol === "tcp" ? "TCP 连接" : "连接");
+      const connectClass = requestedProtocol === "udp" ? "connect-btn udp-connect-btn" : "connect-btn";
       const connectionBusy = state.is_connecting && !state.maintenance_running;
       const connectBtn = isCurrentlyActive 
-        ? `<button class="connect-btn" disabled style="background: var(--success-gradient); color: white; cursor: default; opacity: 1;">已连接 ${esc(protocol)}</button>`
-        : `<button class="connect-btn" ${(isTesting || connectionBusy) ? 'disabled style="opacity:0.3; cursor:not-allowed;"' : ''} onclick="connectNode('${esc(n.id)}')">连接 ${esc(protocol)}</button>`;
+        ? `<button class="${connectClass}" disabled style="background: var(--success-gradient); color: white; cursor: default; opacity: 1;">已连接 ${esc(protocol)}</button>`
+        : `<button class="${connectClass}" ${(isTesting || connectionBusy) ? 'disabled style="opacity:0.3; cursor:not-allowed;"' : ''} onclick="connectNode('${esc(n.id)}', '${requestedProtocol}')">${connectLabel}</button>`;
       
       const favoriteIds = Array.isArray(state.favorite_node_ids) ? state.favorite_node_ids : [];
       const isFav = favoriteIds.includes(n.id);
@@ -1791,6 +1805,7 @@ function render(){
         <td style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(displayLocation)}">${esc(displayLocation)}</td>
         <td style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(n.owner||n.as_name||"-")}">${esc(n.owner||n.as_name||"-")}</td>
         <td><strong style="color: ${protocolColor};">${esc(protocol)}</strong></td>
+        <td class="mono" style="white-space: nowrap; font-variant-numeric: tabular-nums;" title="VPNGate 官方 CSV 上报值，仅供参考">${speed(n.speed)}</td>
         <td style="white-space: nowrap; max-width: 110px; overflow: hidden; text-overflow: ellipsis;" title="${esc(translateIpType(n.ip_type))}">${esc(translateIpType(n.ip_type))}</td>
         <td><div class="table-actions">${latencyText}${testBtn}</div></td>
         <td>
@@ -1945,7 +1960,7 @@ function startConnectionPolling() {
   }, 1000);
 }
 
-async function connectNode(id){
+async function connectNode(id, protocol = ""){
   state.is_connecting = true;
   state.active_openvpn_node_id = id;
   state.active_node_latency = "正在连接";
@@ -1958,7 +1973,7 @@ async function connectNode(id){
     const r = await fetch("./api/connect",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({id})
+      body:JSON.stringify({id, protocol})
     });
     const result = await r.json();
     if (!result.ok) {

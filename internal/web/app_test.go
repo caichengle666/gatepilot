@@ -435,11 +435,38 @@ func TestIndexShowsNetworkSettingsAndNodeLatency(t *testing.T) {
 		"net_upstream_proxy", "net_speed_test_url", "runSpeedTest()",
 		"单次最多读取 20 MB", "节点延迟", "${latencyText}${testBtn}",
 		"openvpn_warning", "state.openvpn_ok === false",
-		"dashboard_traffic", "./api/traffic", "实时 ↓",
+		"dashboard_traffic", "./api/traffic", "实时 ↓", "官方带宽",
+		"UDP 连接", "JSON.stringify({id, protocol})",
 	} {
 		if !strings.Contains(indexHTML, expected) {
 			t.Fatalf("index is missing %q", expected)
 		}
+	}
+}
+
+func TestValidateConnectProtocol(t *testing.T) {
+	config := store.LoadAppConfig()
+	config.DataDir = t.TempDir()
+	application, err := store.New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	application.Nodes = []store.Node{
+		{ID: "udp-node", Protocol: "udp"},
+		{ID: "tcp-node", Protocol: "tcp-client"},
+	}
+
+	if err := validateConnectProtocol(application, "udp-node", "udp"); err != nil {
+		t.Fatalf("UDP node rejected: %v", err)
+	}
+	if err := validateConnectProtocol(application, "tcp-node", "tcp"); err != nil {
+		t.Fatalf("TCP node rejected: %v", err)
+	}
+	if err := validateConnectProtocol(application, "tcp-node", "udp"); err == nil {
+		t.Fatal("UDP request must not connect a TCP node")
+	}
+	if err := validateConnectProtocol(application, "udp-node", "quic"); err == nil {
+		t.Fatal("unsupported protocol must be rejected")
 	}
 }
 
