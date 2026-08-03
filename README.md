@@ -81,9 +81,9 @@ GatePilot 不会修改 Windows 全局默认路由；只有使用 GatePilot 本�
 bash <(curl -Ls https://raw.githubusercontent.com/caichengle666/gatepilot/main/install.sh)
 ```
 
-首次在交互终端安装时会启动配置向导，可设置管理账号密码、Web 绑定地址、Web/代理端口、安全路径、代理认证和前置代理。用于自动化部署时可设置 `GATEPILOT_SKIP_WIZARD=1` 跳过向导并使用随机凭据。
+首次在交互终端安装时会先选择原生安装或 Docker Compose 安装，再启动配置向导，可设置管理账号密码、Web 绑定地址、Web/代理端口、安全路径、代理认证和前置代理。用于自动化部署时可通过 `GATEPILOT_INSTALL_MODE=native|docker` 指定模式，并设置 `GATEPILOT_SKIP_WIZARD=1` 跳过向导、使用随机凭据。
 
-安装目录为 `/opt/gatepilot`，systemd/OpenRC 服务名为 `gatepilot`。安装后可使用：
+安装目录为 `/opt/gatepilot`。原生模式使用 systemd/OpenRC 服务，Docker 模式使用 `compose.yml` 和 `data/` 持久化目录；两种模式安装后都可使用：
 
 ```bash
 ml info

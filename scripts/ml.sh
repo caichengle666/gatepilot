@@ -2,16 +2,61 @@
 set -u
 
 INSTALL_DIR="${GATEPILOT_INSTALL_DIR:-${AIMILIVPN_INSTALL_DIR:-/opt/gatepilot}}"
-AUTH_FILE="$INSTALL_DIR/vpngate_data/ui_auth.json"
-STATE_FILE="$INSTALL_DIR/vpngate_data/state.json"
 SERVICE_NAME="gatepilot"
+DOCKER_MODE=0
+if [ -f "$INSTALL_DIR/.docker_install" ]; then
+    DOCKER_MODE=1
+    AUTH_FILE="$INSTALL_DIR/data/ui_auth.json"
+    STATE_FILE="$INSTALL_DIR/data/state.json"
+else
+    AUTH_FILE="$INSTALL_DIR/vpngate_data/ui_auth.json"
+    STATE_FILE="$INSTALL_DIR/vpngate_data/state.json"
+fi
 
 if [ "$(id -u)" != "0" ]; then
     echo "错误: 必须使用 root 权限运行 ml。"
     exit 1
 fi
 
+compose() {
+    if docker compose version >/dev/null 2>&1; then
+        docker compose "$@"
+    elif command -v docker-compose >/dev/null 2>&1; then
+        docker-compose "$@"
+    else
+        echo "未检测到 Docker Compose。"
+        return 127
+    fi
+}
+
+compose_env_value() {
+    local key="$1" fallback="$2" value=""
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        value=$(sed -n "s/^${key}=//p" "$INSTALL_DIR/.env" | tail -n 1)
+    fi
+    echo "${value:-$fallback}"
+}
+
+set_compose_env_value() {
+    local key="$1" value="$2" temporary
+    temporary=$(mktemp)
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        grep -v "^${key}=" "$INSTALL_DIR/.env" > "$temporary" || true
+    fi
+    printf '%s=%s\n' "$key" "$value" >> "$temporary"
+    install -m 600 "$temporary" "$INSTALL_DIR/.env"
+    rm -f "$temporary"
+}
+
 service_action() {
+    if [ "$DOCKER_MODE" = "1" ]; then
+        case "$1" in
+            start) (cd "$INSTALL_DIR" && compose up -d) ;;
+            stop) (cd "$INSTALL_DIR" && compose stop) ;;
+            restart) (cd "$INSTALL_DIR" && compose up -d --force-recreate) ;;
+        esac
+        return
+    fi
     if command -v systemctl >/dev/null 2>&1; then
         systemctl "$1" "$SERVICE_NAME.service"
     elif command -v rc-service >/dev/null 2>&1; then
@@ -23,6 +68,10 @@ service_action() {
 }
 
 service_active() {
+    if [ "$DOCKER_MODE" = "1" ]; then
+        [ "$(docker inspect -f '{{.State.Running}}' "$SERVICE_NAME" 2>/dev/null)" = "true" ]
+        return
+    fi
     if command -v systemctl >/dev/null 2>&1; then
         systemctl is-active --quiet "$SERVICE_NAME.service"
     else
@@ -31,6 +80,10 @@ service_active() {
 }
 
 service_pid() {
+    if [ "$DOCKER_MODE" = "1" ]; then
+        docker inspect -f '{{.State.Pid}}' "$SERVICE_NAME" 2>/dev/null
+        return
+    fi
     if command -v systemctl >/dev/null 2>&1; then
         systemctl show -p MainPID --value "$SERVICE_NAME.service" 2>/dev/null
     else
@@ -80,10 +133,16 @@ public_ip() {
 
 show_info() {
     local host port secret proxy_port username password display_host
-    host=$(json_value host)
-    port=$(json_value port)
+    if [ "$DOCKER_MODE" = "1" ]; then
+        host=$(compose_env_value GATEPILOT_UI_BIND 0.0.0.0)
+        port=$(compose_env_value GATEPILOT_UI_PORT 8787)
+        proxy_port=$(compose_env_value GATEPILOT_PROXY_PORT 7928)
+    else
+        host=$(json_value host)
+        port=$(json_value port)
+        proxy_port=$(json_value proxy_port)
+    fi
     secret=$(json_value secret_path)
-    proxy_port=$(json_value proxy_port)
     username=$(json_value username)
     password=$(json_value password)
     case "$host" in
@@ -104,10 +163,20 @@ show_info() {
 
 show_status() {
     local service_status proxy_status vpn_status pid active latency message proxy_port
-    proxy_port=$(json_value proxy_port)
+    if [ "$DOCKER_MODE" = "1" ]; then
+        proxy_port=$(compose_env_value GATEPILOT_PROXY_PORT 7928)
+    else
+        proxy_port=$(json_value proxy_port)
+    fi
     if service_active; then service_status="已启动"; else service_status="未启动"; fi
     if ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$proxy_port$"; then proxy_status="已监听"; else proxy_status="未监听"; fi
-    if pgrep -f '[o]penvpn.*tun0' >/dev/null 2>&1; then vpn_status="已连接"; else vpn_status="未连接"; fi
+    if [ "$DOCKER_MODE" = "1" ]; then
+        if docker exec "$SERVICE_NAME" pgrep -f '[o]penvpn.*tun0' >/dev/null 2>&1; then vpn_status="已连接"; else vpn_status="未连接"; fi
+    elif pgrep -f '[o]penvpn.*tun0' >/dev/null 2>&1; then
+        vpn_status="已连接"
+    else
+        vpn_status="未连接"
+    fi
     pid=$(service_pid)
     active=$(state_value active_openvpn_node_id)
     latency=$(state_value active_node_latency)
@@ -124,6 +193,10 @@ show_status() {
 }
 
 show_logs() {
+    if [ "$DOCKER_MODE" = "1" ]; then
+        (cd "$INSTALL_DIR" && compose logs -f --tail=100 "$SERVICE_NAME")
+        return
+    fi
     if command -v journalctl >/dev/null 2>&1; then
         journalctl -u "$SERVICE_NAME.service" -f --no-pager
     else
@@ -156,12 +229,19 @@ valid_port() {
 }
 
 configure_ports() {
-    local web_port proxy_port
+    local current_web_port current_proxy_port web_port proxy_port
     require_config
-    read -r -p "网页管理端口 [$(json_value port)]: " web_port
-    read -r -p "代理出站端口 [$(json_value proxy_port)]: " proxy_port
-    web_port=${web_port:-$(json_value port)}
-    proxy_port=${proxy_port:-$(json_value proxy_port)}
+    if [ "$DOCKER_MODE" = "1" ]; then
+        current_web_port=$(compose_env_value GATEPILOT_UI_PORT 8787)
+        current_proxy_port=$(compose_env_value GATEPILOT_PROXY_PORT 7928)
+    else
+        current_web_port=$(json_value port)
+        current_proxy_port=$(json_value proxy_port)
+    fi
+    read -r -p "网页管理端口 [${current_web_port}]: " web_port
+    read -r -p "代理出站端口 [${current_proxy_port}]: " proxy_port
+    web_port=${web_port:-$current_web_port}
+    proxy_port=${proxy_port:-$current_proxy_port}
     if ! valid_port "$web_port" || ! valid_port "$proxy_port" || [ "$proxy_port" -lt 1024 ]; then
         echo "端口无效；代理端口范围必须是 1024-65535。"
         return 1
@@ -170,8 +250,13 @@ configure_ports() {
         echo "网页端口不能与代理端口相同。"
         return 1
     fi
-    set_json_number port "$web_port"
-    set_json_number proxy_port "$proxy_port"
+    if [ "$DOCKER_MODE" = "1" ]; then
+        set_compose_env_value GATEPILOT_UI_PORT "$web_port"
+        set_compose_env_value GATEPILOT_PROXY_PORT "$proxy_port"
+    else
+        set_json_number port "$web_port"
+        set_json_number proxy_port "$proxy_port"
+    fi
     service_action restart
     echo "端口已保存并重启服务。"
 }
@@ -183,24 +268,36 @@ random_suffix() {
 configure_web() {
     local choice host suffix
     require_config
-    echo "1) 仅本机 IPv4 (127.0.0.1)"
-    echo "2) IPv4 公网 (0.0.0.0)"
-    echo "3) IPv4/IPv6 双栈公网 (::)"
-    echo "4) 仅本机 IPv6 (::1)"
-    read -r -p "绑定地址 [1-4，默认3]: " choice
-    case "${choice:-3}" in
-        1) host="127.0.0.1" ;;
-        2) host="0.0.0.0" ;;
-        4) host="::1" ;;
-        *) host="::" ;;
-    esac
+    if [ "$DOCKER_MODE" = "1" ]; then
+        echo "1) 仅本机访问 (127.0.0.1)"
+        echo "2) 公网 IPv4 (0.0.0.0)"
+        read -r -p "Web 发布范围 [1-2，默认2]: " choice
+        case "${choice:-2}" in 1) host="127.0.0.1" ;; *) host="0.0.0.0" ;; esac
+    else
+        echo "1) 仅本机 IPv4 (127.0.0.1)"
+        echo "2) IPv4 公网 (0.0.0.0)"
+        echo "3) IPv4/IPv6 双栈公网 (::)"
+        echo "4) 仅本机 IPv6 (::1)"
+        read -r -p "绑定地址 [1-4，默认3]: " choice
+        case "${choice:-3}" in
+            1) host="127.0.0.1" ;;
+            2) host="0.0.0.0" ;;
+            4) host="::1" ;;
+            *) host="::" ;;
+        esac
+    fi
     read -r -p "安全路径 [回车保留，输入 random 随机生成]: " suffix
     if [ "$suffix" = "random" ]; then suffix=$(random_suffix); fi
     if [ -n "$suffix" ] && [[ ! "$suffix" =~ ^[A-Za-z0-9]+$ ]]; then
         echo "安全路径只能包含英文字母和数字。"
         return 1
     fi
-    set_json_string host "$host"
+    if [ "$DOCKER_MODE" = "1" ]; then
+        set_compose_env_value GATEPILOT_UI_BIND "$host"
+        set_json_string host "0.0.0.0"
+    else
+        set_json_string host "$host"
+    fi
     if [ -n "$suffix" ]; then set_json_string secret_path "$suffix"; fi
     service_action restart
     show_info
@@ -244,11 +341,17 @@ configure_routing() {
 
 update_service() {
     git -C "$INSTALL_DIR" pull --ff-only
-    (cd "$INSTALL_DIR" && go build -trimpath -ldflags="-s -w" -o gatepilot.new .)
-    install -m 755 "$INSTALL_DIR/gatepilot.new" "$INSTALL_DIR/gatepilot"
-    rm -f "$INSTALL_DIR/gatepilot.new"
+    if [ "$DOCKER_MODE" = "1" ]; then
+        (cd "$INSTALL_DIR" && compose pull && compose up -d --remove-orphans)
+    else
+        (cd "$INSTALL_DIR" && go build -trimpath -ldflags="-s -w" -o gatepilot.new .)
+        install -m 755 "$INSTALL_DIR/gatepilot.new" "$INSTALL_DIR/gatepilot"
+        rm -f "$INSTALL_DIR/gatepilot.new"
+    fi
     install -m 755 "$INSTALL_DIR/scripts/ml.sh" /usr/local/bin/ml
-    service_action restart
+    if [ "$DOCKER_MODE" != "1" ]; then
+        service_action restart
+    fi
     echo "更新完成。"
 }
 
@@ -256,8 +359,13 @@ uninstall_service() {
     local confirm
     read -r -p "输入 DELETE 确认完全卸载 GatePilot: " confirm
     [ "$confirm" = "DELETE" ] || { echo "已取消。"; return; }
+    case "$INSTALL_DIR" in
+        ""|/|/opt|/usr|/var|/home) echo "拒绝删除危险安装目录: $INSTALL_DIR"; return 1 ;;
+    esac
     service_action stop || true
-    if command -v systemctl >/dev/null 2>&1; then
+    if [ "$DOCKER_MODE" = "1" ]; then
+        (cd "$INSTALL_DIR" && compose down --remove-orphans) || true
+    elif command -v systemctl >/dev/null 2>&1; then
         systemctl disable "$SERVICE_NAME.service" || true
         rm -f "/etc/systemd/system/$SERVICE_NAME.service" "/lib/systemd/system/$SERVICE_NAME.service"
         systemctl daemon-reload

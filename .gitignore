@@ -83,3 +83,7 @@ Desktop.ini
 geoip.dat
 geosite.dat
 *.dat.tmp
+
+# ---- Docker 本地安装状态 ----
+.docker_install
+.env
