@@ -1633,7 +1633,7 @@ function render(){
             </div>
             <div class="active-card-meta" style="margin-top: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
               <span>出口 IP: <strong class="mono">${esc(state.proxy_ip || "-")}</strong></span>
-              <span id="dashboard_traffic" style="font-size: 12px; color: var(--text-secondary);">实时网速加载中...</span>
+              <span id="dashboard_traffic" style="display: inline-block; min-width: 330px; white-space: nowrap; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums;">实时网速加载中...</span>
               <button type="button" id="dashboard_speed_test_btn" onclick="runDashboardSpeedTest()" class="btn-primary" style="height: 30px; padding: 0 12px; border-radius: 8px; font-size: 12px;" ${dashboardSpeedTest.running ? "disabled" : ""}>${dashboardSpeedTest.running ? "测速中..." : "宽带测速"}</button>
               <span id="dashboard_speed_test_result" style="font-size: 12px; color: ${dashboardSpeedTest.color};">${esc(dashboardSpeedTest.text)}</span>
             </div>
@@ -2850,15 +2850,27 @@ function formatRate(value) {
   return bits.toFixed(0) + " bps";
 }
 
+let trafficRequestInFlight = false;
+let lastTrafficText = "";
+
 async function updateTrafficStats() {
   const trafficElement = $("dashboard_traffic");
-  if (!trafficElement) return;
+  if (!trafficElement || trafficRequestInFlight) return;
+  trafficRequestInFlight = true;
   try {
     const response = await fetch("./api/traffic", { cache: "no-store" });
     const traffic = await response.json();
-    trafficElement.textContent = `实时 ↓ ${formatRate(traffic.download_bps)} / ↑ ${formatRate(traffic.upload_bps)} · 会话 ↓ ${formatBytes(traffic.download_bytes)} / ↑ ${formatBytes(traffic.upload_bytes)}`;
+    const text = `实时 ↓ ${formatRate(traffic.download_bps)} / ↑ ${formatRate(traffic.upload_bps)} · 会话 ↓ ${formatBytes(traffic.download_bytes)} / ↑ ${formatBytes(traffic.upload_bytes)}`;
+    if (text !== lastTrafficText && trafficElement.isConnected) {
+      trafficElement.textContent = text;
+      lastTrafficText = text;
+    }
   } catch (error) {
-    trafficElement.textContent = "实时网速不可用";
+    if (!lastTrafficText && trafficElement.isConnected) {
+      trafficElement.textContent = "实时网速不可用";
+    }
+  } finally {
+    trafficRequestInFlight = false;
   }
 }
 
