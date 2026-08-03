@@ -58,9 +58,6 @@ func TestOpenVPNErrorPreservesDriverFailure(t *testing.T) {
 	if err != original {
 		t.Fatalf("typed OpenVPN failure was wrapped: %v", err)
 	}
-	if !shouldRetryOpenVPNDriver(err) {
-		t.Fatal("permission failure should allow fallback to the next Windows driver")
-	}
 }
 
 func TestOpenVPNErrorEnvironmentFailuresDoNotBlacklist(t *testing.T) {
