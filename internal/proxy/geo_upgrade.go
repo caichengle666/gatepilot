@@ -17,11 +17,25 @@ import (
 var (
 	geoUpstreamProxy string
 	geoDownloadOnce  sync.Once
+	geoStateMu       sync.Mutex
+	geoState         = map[string]string{}
 )
 
 // SetGeoUpstreamProxy 设置 geo 文件下载使用的前置代理（留空表示直连）。
 func SetGeoUpstreamProxy(raw string) {
 	geoUpstreamProxy = strings.TrimSpace(raw)
+}
+
+func setGeoState(kind, state string) {
+	geoStateMu.Lock()
+	geoState[kind] = state
+	geoStateMu.Unlock()
+}
+
+func getGeoState(kind string) string {
+	geoStateMu.Lock()
+	defer geoStateMu.Unlock()
+	return geoState[kind]
 }
 
 var geoUpgradeMirrors = map[string][]string{
@@ -36,34 +50,47 @@ var geoUpgradeMirrors = map[string][]string{
 }
 
 // GeoStatus 返回 geo 数据文件状态。
-func GeoStatus() map[string]string {
-	result := map[string]string{}
+// GeoStatus 返回 geo 数据文件状态：value 为 {"status","detail"}。
+func GeoStatus() map[string]map[string]string {
+	result := map[string]map[string]string{}
 	for _, kind := range []string{"geoip", "geosite"} {
 		path := GeoFilePath(kind)
 		info, err := os.Stat(path)
-		if err != nil || info.Size() < 1000 {
-			result[kind] = "未加载"
-			continue
-		}
-		if kind == "geoip" {
-			m := getGeoIPMatcher("cn")
-			if m != nil {
-				m.mu.RLock()
-				result[kind] = fmt.Sprintf("%d cidr", len(m.cidrs))
-				m.mu.RUnlock()
+		hasFile := err == nil && info.Size() >= 1000
+		entry := map[string]string{}
+		switch {
+		case getGeoState(kind) == "downloading":
+			entry["status"] = "downloading"
+			entry["detail"] = "数据文件下载中..."
+		case !hasFile && getGeoState(kind) == "failed":
+			entry["status"] = "failed"
+			entry["detail"] = "数据文件下载失败；请检查网络或前置代理后点击「在线升级」重试"
+		case !hasFile:
+			entry["status"] = "missing"
+			entry["detail"] = "未加载（本地缺少数据文件）"
+		default:
+			entry["status"] = "ready"
+			if kind == "geoip" {
+				m := getGeoIPMatcher("cn")
+				if m != nil {
+					m.mu.RLock()
+					entry["detail"] = fmt.Sprintf("已加载 %d 个网段", len(m.cidrs))
+					m.mu.RUnlock()
+				} else {
+					entry["detail"] = fmt.Sprintf("已加载 %d KB", info.Size()/1024)
+				}
 			} else {
-				result[kind] = fmt.Sprintf("%d KB", info.Size()/1024)
-			}
-		} else {
-			m := getGeoSiteMatcher("cn")
-			if m != nil {
-				m.mu.RLock()
-				result[kind] = fmt.Sprintf("%d domains", len(m.suffixes)+len(m.domains)+len(m.keywords)+len(m.regexps))
-				m.mu.RUnlock()
-			} else {
-				result[kind] = fmt.Sprintf("%d KB", info.Size()/1024)
+				m := getGeoSiteMatcher("cn")
+				if m != nil {
+					m.mu.RLock()
+					entry["detail"] = fmt.Sprintf("已加载 %d 个域名", len(m.suffixes)+len(m.domains)+len(m.keywords)+len(m.regexps))
+					m.mu.RUnlock()
+				} else {
+					entry["detail"] = fmt.Sprintf("已加载 %d KB", info.Size()/1024)
+				}
 			}
 		}
+		result[kind] = entry
 	}
 	return result
 }
@@ -97,6 +124,7 @@ func EnsureGeoFiles() {
 			for _, kind := range missing {
 				path := GeoFilePath(kind)
 				log.Printf("[Geo] 本地缺少 %s.dat，后台自动下载中...", kind)
+				setGeoState(kind, "downloading")
 				ok := false
 				for _, url := range geoUpgradeMirrors[kind] {
 					if err := downloadGeoFile(url, path); err != nil {
@@ -108,9 +136,11 @@ func EnsureGeoFiles() {
 					break
 				}
 				if !ok {
+					setGeoState(kind, "failed")
 					log.Printf("[Geo] 自动下载失败，分流规则中 geosite/geoip 将不可用: %s", path)
 					continue
 				}
+				setGeoState(kind, "")
 				if kind == "geoip" {
 					LoadGeoIP()
 				} else {
@@ -131,14 +161,17 @@ func UpgradeGeoFiles() map[string]string {
 		go func(k string, ms []string) {
 			defer wg.Done()
 			path := GeoFilePath(k)
+			setGeoState(k, "downloading")
 			for _, url := range ms {
 				if err := downloadGeoFile(url, path); err == nil {
+					setGeoState(k, "")
 					mu.Lock()
 					results[k] = "updated"
 					mu.Unlock()
 					return
 				}
 			}
+			setGeoState(k, "failed")
 			mu.Lock()
 			results[k] = "all mirrors failed"
 			mu.Unlock()

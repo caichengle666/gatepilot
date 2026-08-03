@@ -2521,13 +2521,27 @@ async function loadSplitRoutingState() {
   } catch (err) { /* ignore */ }
 }
 
+const geoSpinner = '<svg style="animation: spin 1s linear infinite; width: 13px; height: 13px; display: inline-block; vertical-align: middle; margin-right: 4px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-opacity="0.2" fill="none"></circle><path d="M4 12a8 8 0 018-8" stroke="currentColor" fill="none"></path></svg>';
+
+function geoKindHTML(kind, obj) {
+  if (!obj || typeof obj === 'string') return kind + '.dat: <strong>' + (obj || '未加载') + '</strong><br>';
+  const label = kind + '.dat';
+  switch (obj.status) {
+    case 'downloading':
+      return '<span style="color: var(--warning);">' + geoSpinner + label + ': ' + esc(obj.detail) + '</span><br>';
+    case 'failed':
+      return '<span style="color: var(--danger);">&bull; ' + label + ': ' + esc(obj.detail) + '</span><br>';
+    case 'missing':
+      return '<span style="color: var(--text-secondary);">' + label + ': ' + esc(obj.detail) + '</span><br>';
+    default:
+      return '<span style="color: var(--success);">&bull; ' + label + ': ' + esc(obj.detail) + '</span><br>';
+  }
+}
+
 function updateGeoStatus(status) {
   const el = $("net_geo_status");
   if (!el || !status) return;
-  let html = "";
-  if (status.geoip) html += "geoip.dat: <strong>" + status.geoip + "</strong><br>";
-  if (status.geosite) html += "geosite.dat: <strong>" + status.geosite + "</strong>";
-  el.innerHTML = html || "未加载";
+  el.innerHTML = geoKindHTML('geoip', status.geoip) + geoKindHTML('geosite', status.geosite);
 }
 
 async function geoUpgrade() {
@@ -2540,7 +2554,13 @@ async function geoUpgrade() {
       $("network_success").textContent = "Geo 数据升级成功！"; $("network_success").style.display = "block";
       updateGeoStatus(data.geo_status);
     } else {
-      $("network_error").textContent = "升级失败: " + JSON.stringify(data.results || data.error); $("network_error").style.display = "block";
+      let detail = data.error || "";
+      if (data.results) {
+        const parts = [];
+        for (const [k, v] of Object.entries(data.results)) parts.push(k + ": " + (v === "updated" ? "成功" : v));
+        detail = parts.join("；");
+      }
+      $("network_error").textContent = "升级失败: " + (detail || "未知错误"); $("network_error").style.display = "block";
     }
   } catch (err) {
     $("network_error").textContent = "升级请求失败"; $("network_error").style.display = "block";
