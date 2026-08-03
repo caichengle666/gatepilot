@@ -83,7 +83,9 @@ func ProxyCredentials(ui UIConfig) (username, password string, enabled bool) {
 // ValidateProxyAuth 校验代理监听地址和认证配置是否安全。
 func ValidateProxyAuth(host string, ui UIConfig) error {
 	_, _, enabled := ProxyCredentials(ui)
-	if !ProxyHostIsLocal(host) && !enabled {
+	publishedHost := strings.TrimSpace(os.Getenv("LOCAL_PROXY_PUBLISHED_HOST"))
+	publishedLocally := publishedHost != "" && ProxyHostIsLocal(publishedHost)
+	if !ProxyHostIsLocal(host) && !publishedLocally && !enabled {
 		return errors.New("代理监听非本机地址时，必须启用代理认证")
 	}
 	if enabled {

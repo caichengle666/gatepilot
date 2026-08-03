@@ -16,6 +16,7 @@ func TestProxyHostIsLocal(t *testing.T) {
 }
 
 func TestValidateProxyAuthRequiresCredentialsForExternalHost(t *testing.T) {
+	t.Setenv("LOCAL_PROXY_PUBLISHED_HOST", "")
 	if err := ValidateProxyAuth("0.0.0.0", UIConfig{}); err == nil {
 		t.Fatal("external proxy host without auth should be rejected")
 	}
@@ -30,5 +31,16 @@ func TestValidateProxyAuthRequiresCredentialsForExternalHost(t *testing.T) {
 func TestValidateProxyAuthAllowsLocalWithoutAuth(t *testing.T) {
 	if err := ValidateProxyAuth("127.0.0.1", UIConfig{}); err != nil {
 		t.Fatalf("local proxy host without auth should be accepted: %v", err)
+	}
+}
+
+func TestValidateProxyAuthAllowsContainerBindPublishedLocally(t *testing.T) {
+	t.Setenv("LOCAL_PROXY_PUBLISHED_HOST", "127.0.0.1")
+	if err := ValidateProxyAuth("0.0.0.0", UIConfig{}); err != nil {
+		t.Fatalf("container proxy published only on localhost should be accepted: %v", err)
+	}
+	t.Setenv("LOCAL_PROXY_PUBLISHED_HOST", "0.0.0.0")
+	if err := ValidateProxyAuth("0.0.0.0", UIConfig{}); err == nil {
+		t.Fatal("publicly published container proxy without auth should be rejected")
 	}
 }

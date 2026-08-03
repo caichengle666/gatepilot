@@ -183,6 +183,7 @@ export LOCAL_PROXY_PASS=your-strong-password
 | `OPENVPN_CMD` | Linux 为 `openvpn`；Windows 优先查找程序旁 `openvpn\openvpn.exe` | OpenVPN 命令或完整路径 |
 | `LOCAL_PROXY_HOST` | `127.0.0.1` | 代理监听地址 |
 | `LOCAL_PROXY_PORT` | `7928` | 代理端口 |
+| `LOCAL_PROXY_PUBLISHED_HOST` | 空 | 容器代理发布地址；仅发布到本机时允许容器内监听 `0.0.0.0` |
 | `LOCAL_PROXY_MAX_CONNECTIONS` | `256` | 最大并发连接数 |
 | `LOCAL_PROXY_BIND_TUN` | `true` | 强制把代理出站绑定到 Linux `tun0` 或 Windows OpenVPN 网卡 |
 | `LOCAL_PROXY_USER` | 空 | 代理认证用户名；优先于 Web 配置 |

@@ -15,6 +15,7 @@ services:
       UI_PORT: "8787"
       LOCAL_PROXY_HOST: 0.0.0.0
       LOCAL_PROXY_PORT: "7928"
+      LOCAL_PROXY_PUBLISHED_HOST: ${GATEPILOT_PROXY_BIND:-127.0.0.1}
       LOCAL_PROXY_BIND_TUN: "true"
       TZ: ${TZ:-Asia/Shanghai}
     ports:
