@@ -49,8 +49,10 @@ func main() {
 	proxy.SetGeoUpstreamProxy(application.UpstreamProxy())
 	proxy.EnsureGeoFiles()
 	initSplitRouting(application, ui)
+	managedOpenVPNService := false
 	if ok, message := store.OpenVPNStatus(application.Config.OpenVPNCommand); ok {
 		prepared, prepareErr := vpn.PrepareWindowsOpenVPNService(application.Config.OpenVPNCommand)
+		managedOpenVPNService = prepared
 		if prepareErr != nil {
 			message = "Windows OpenVPN SYSTEM 服务安装或修复失败: " + prepareErr.Error()
 			_ = application.UpdateState(func(state *store.RuntimeState) {
@@ -75,6 +77,17 @@ func main() {
 		})
 		log.Printf("OpenVPN 核心不可用: %s", message)
 	}
+	cleanup := func() {
+		vpnCtrl.Stop("服务正在退出")
+		if managedOpenVPNService {
+			if err := vpn.RemoveWindowsOpenVPNService(); err != nil {
+				log.Printf("删除 GatePilotOpenVPN SYSTEM 服务失败: %v", err)
+			} else {
+				log.Printf("GatePilotOpenVPN SYSTEM 服务已删除")
+			}
+		}
+	}
+	defer cleanup()
 	log.Printf("管理地址: http://127.0.0.1:%d/%s/", ui.Port, ui.SecretPath)
 	if firstStart {
 		log.Printf("初始账号: %s  密码: %s", ui.Username, ui.Password)
@@ -91,11 +104,11 @@ func main() {
 		signals := make(chan os.Signal, 1)
 		signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 		<-signals
-		vpnCtrl.Stop("服务正在退出")
+		cleanup()
 		os.Exit(0)
 	}()
 	if err := webApp.Serve(); err != nil {
-		log.Fatalf("Web 管理服务停止: %v", err)
+		log.Printf("Web 管理服务停止: %v", err)
 	}
 }
 

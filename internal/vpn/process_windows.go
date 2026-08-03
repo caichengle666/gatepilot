@@ -380,6 +380,27 @@ func PrepareWindowsOpenVPNService(openVPNCommand string) (bool, error) {
 	return true, nil
 }
 
+// RemoveWindowsOpenVPNService 停止并删除 GatePilot 自己安装的 SYSTEM 服务。
+func RemoveWindowsOpenVPNService() error {
+	if err := stopOpenVPNService(5 * time.Second); err != nil && !errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+		return err
+	}
+	manager, err := mgr.Connect()
+	if err != nil {
+		return err
+	}
+	defer manager.Disconnect()
+	service, err := manager.OpenService(openVPNServiceName)
+	if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer service.Close()
+	return service.Delete()
+}
+
 func openVPNServicePaths() (string, string, string, error) {
 	root := os.Getenv("VPNGATE_DATA_DIR")
 	if strings.TrimSpace(root) == "" {

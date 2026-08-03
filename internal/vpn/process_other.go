@@ -18,3 +18,7 @@ func RunWindowsOpenVPNService(_ []string) bool {
 func PrepareWindowsOpenVPNService(_ string) (bool, error) {
 	return false, nil
 }
+
+func RemoveWindowsOpenVPNService() error {
+	return nil
+}
