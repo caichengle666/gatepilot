@@ -10,7 +10,19 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/caichengle666/gatepilot/internal/store"
 )
+
+var (
+	geoUpstreamProxy string
+	geoDownloadOnce  sync.Once
+)
+
+// SetGeoUpstreamProxy 设置 geo 文件下载使用的前置代理（留空表示直连）。
+func SetGeoUpstreamProxy(raw string) {
+	geoUpstreamProxy = strings.TrimSpace(raw)
+}
 
 var geoUpgradeMirrors = map[string][]string{
 	"geoip": {
@@ -67,28 +79,46 @@ func GeoFilePath(kind string) string {
 func EnsureGeoFiles() {
 	SetGeoIPPath(GeoFilePath("geoip"))
 	SetGeoSitePath(GeoFilePath("geosite"))
-	for _, kind := range []string{"geoip", "geosite"} {
-		path := GeoFilePath(kind)
-		if info, err := os.Stat(path); err == nil && info.Size() >= 1000 {
-			continue
-		}
-		log.Printf("[Geo] 本地缺少 %s.dat，开始自动下载...", kind)
-		ok := false
-		for _, url := range geoUpgradeMirrors[kind] {
-			if err := downloadGeoFile(url, path); err != nil {
-				log.Printf("[Geo] 自动下载失败 %s: %v", url, err)
-				continue
-			}
-			log.Printf("[Geo] 自动下载完成: %s", path)
-			ok = true
-			break
-		}
-		if !ok {
-			log.Printf("[Geo] 自动下载失败，分流规则中 geosite/geoip 将不可用: %s", path)
-		}
-	}
 	LoadGeoIP()
 	LoadGeoSite()
+	geoDownloadOnce.Do(func() {
+		missing := make([]string, 0, 2)
+		for _, kind := range []string{"geoip", "geosite"} {
+			path := GeoFilePath(kind)
+			if info, err := os.Stat(path); err == nil && info.Size() >= 1000 {
+				continue
+			}
+			missing = append(missing, kind)
+		}
+		if len(missing) == 0 {
+			return
+		}
+		go func() {
+			for _, kind := range missing {
+				path := GeoFilePath(kind)
+				log.Printf("[Geo] 本地缺少 %s.dat，后台自动下载中...", kind)
+				ok := false
+				for _, url := range geoUpgradeMirrors[kind] {
+					if err := downloadGeoFile(url, path); err != nil {
+						log.Printf("[Geo] 自动下载失败 %s: %v", url, err)
+						continue
+					}
+					log.Printf("[Geo] 自动下载完成: %s", path)
+					ok = true
+					break
+				}
+				if !ok {
+					log.Printf("[Geo] 自动下载失败，分流规则中 geosite/geoip 将不可用: %s", path)
+					continue
+				}
+				if kind == "geoip" {
+					LoadGeoIP()
+				} else {
+					LoadGeoSite()
+				}
+			}
+		}()
+	})
 }
 
 // UpgradeGeoFiles 在线升级 geoip.dat 和 geosite.dat。
@@ -132,22 +162,27 @@ func UpgradeGeoFiles() map[string]string {
 }
 
 func downloadGeoFile(url, path string) error {
-	client := &http.Client{Timeout: 5 * time.Minute}
-	resp, err := client.Get(url)
+	client := newGeoHTTPClient()
+	request, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	request.Header.Set("User-Agent", "gatepilot-go/1.0")
+	response, err := client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d", response.StatusCode)
 	}
 	tmpName := path + ".tmp"
-	f, err := os.Create(tmpName)
+	file, err := os.Create(tmpName)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	n, err := io.Copy(f, resp.Body)
+	defer file.Close()
+	n, err := io.Copy(file, response.Body)
 	if err != nil {
 		os.Remove(tmpName)
 		return err
@@ -156,8 +191,23 @@ func downloadGeoFile(url, path string) error {
 		os.Remove(tmpName)
 		return fmt.Errorf("file too small (%d bytes)", n)
 	}
-	f.Close()
+	file.Close()
 	return os.Rename(tmpName, path)
+}
+
+// newGeoHTTPClient 构造 geo 下载客户端：总超时 60 秒，并优先使用配置的前置代理。
+func newGeoHTTPClient() *http.Client {
+	client := &http.Client{Timeout: 60 * time.Second}
+	if geoUpstreamProxy == "" {
+		return client
+	}
+	proxyURL, err := store.ParseProxyURL(geoUpstreamProxy)
+	if err != nil || proxyURL == nil {
+		return client
+	}
+	transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+	client.Transport = transport
+	return client
 }
 
 // ReloadGeoData 重新加载 geo 数据文件。

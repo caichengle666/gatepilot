@@ -716,6 +716,7 @@ func (a *Application) updateSettings(writer http.ResponseWriter, request *http.R
 		writeOperationResult(writer, "", err)
 		return
 	}
+	proxy.SetGeoUpstreamProxy(a.Store.UpstreamProxy())
 	a.reloadSplitRouting()
 	a.enforceRoutingSettings()
 	if proxyAuthChanged && a.Proxy != nil {

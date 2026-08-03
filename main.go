@@ -46,6 +46,7 @@ func main() {
 		log.Printf("代理连续 %d 次出站失败，触发自动切换节点", failures)
 		webApp.TriggerAutoSwitch(failures)
 	})
+	proxy.SetGeoUpstreamProxy(application.UpstreamProxy())
 	proxy.EnsureGeoFiles()
 	initSplitRouting(application, ui)
 	if ok, message := store.OpenVPNStatus(application.Config.OpenVPNCommand); ok {
