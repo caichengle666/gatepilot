@@ -180,7 +180,7 @@ configure_initial_settings() {
     local current_username current_port current_proxy_port current_suffix
     local username password confirm bind_choice host host_bind web_port proxy_port suffix
     local config_web_port config_proxy_port
-    local proxy_auth_choice proxy_auth_enabled proxy_username proxy_password upstream_proxy temporary
+    local proxy_bind_choice proxy_bind proxy_auth_choice proxy_auth_enabled proxy_username proxy_password upstream_proxy temporary
 
     [ -f "$AUTH_FILE" ] || return 0
     current_username=$(jq -r '.username // empty' "$AUTH_FILE")
@@ -240,6 +240,16 @@ configure_initial_settings() {
         read -r -p "端口无效或与 Web 端口冲突，请重新输入代理端口: " proxy_port
     done
 
+    proxy_bind="127.0.0.1"
+    if [ "$INSTALL_MODE" = "docker" ]; then
+        echo "1) 仅本机使用代理 (127.0.0.1)"
+        echo "2) 公网使用代理 (0.0.0.0，强制启用认证)"
+        read -r -p "代理发布范围 [1-2，默认1]: " proxy_bind_choice
+        case "${proxy_bind_choice:-1}" in
+            2) proxy_bind="0.0.0.0" ;;
+        esac
+    fi
+
     read -r -p "Web 安全路径 [${current_suffix}，输入 random 重新生成]: " suffix
     suffix=${suffix:-$current_suffix}
     if [ "$suffix" = "random" ]; then
@@ -249,7 +259,12 @@ configure_initial_settings() {
         read -r -p "安全路径只能包含字母和数字，请重新输入: " suffix
     done
 
-    read -r -p "启用本地代理用户名密码认证？[y/N]: " proxy_auth_choice
+    if [ "$proxy_bind" = "0.0.0.0" ]; then
+        echo "公网代理必须启用用户名密码认证。"
+        proxy_auth_choice="y"
+    else
+        read -r -p "启用本地代理用户名密码认证？[y/N]: " proxy_auth_choice
+    fi
     proxy_auth_enabled=false
     proxy_username=""
     proxy_password=""
@@ -276,7 +291,7 @@ configure_initial_settings() {
         config_proxy_port=7928
         set_compose_env_value GATEPILOT_UI_BIND "$host_bind"
         set_compose_env_value GATEPILOT_UI_PORT "$web_port"
-        set_compose_env_value GATEPILOT_PROXY_BIND "127.0.0.1"
+        set_compose_env_value GATEPILOT_PROXY_BIND "$proxy_bind"
         set_compose_env_value GATEPILOT_PROXY_PORT "$proxy_port"
     fi
 

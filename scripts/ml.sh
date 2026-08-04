@@ -132,14 +132,16 @@ public_ip() {
 }
 
 show_info() {
-    local host port secret proxy_port username password display_host
+    local host port secret proxy_bind proxy_port username password display_host proxy_display_host
     if [ "$DOCKER_MODE" = "1" ]; then
         host=$(compose_env_value GATEPILOT_UI_BIND 0.0.0.0)
         port=$(compose_env_value GATEPILOT_UI_PORT 8787)
+        proxy_bind=$(compose_env_value GATEPILOT_PROXY_BIND 127.0.0.1)
         proxy_port=$(compose_env_value GATEPILOT_PROXY_PORT 7928)
     else
         host=$(json_value host)
         port=$(json_value port)
+        proxy_bind="127.0.0.1"
         proxy_port=$(json_value proxy_port)
     fi
     secret=$(json_value secret_path)
@@ -152,13 +154,18 @@ show_info() {
             if [[ "$host" == *:* ]]; then display_host="[$host]"; else display_host="$host"; fi
             ;;
     esac
+    case "$proxy_bind" in
+        "::"|"0.0.0.0"|"") proxy_display_host=$(public_ip) ;;
+        "::1") proxy_display_host="[::1]" ;;
+        *) proxy_display_host="$proxy_bind" ;;
+    esac
     echo "======================================================="
     echo "GatePilot 管理信息"
     echo "======================================================="
     echo "网页登录地址: http://${display_host}:${port}/${secret}/"
     echo "登录用户名:   ${username}"
     echo "登录密码:     ${password}"
-    echo "本地代理:     127.0.0.1:${proxy_port} (HTTP/SOCKS5)"
+    echo "HTTP/SOCKS5:  ${proxy_display_host}:${proxy_port}"
 }
 
 show_status() {
@@ -303,6 +310,50 @@ configure_web() {
     show_info
 }
 
+configure_proxy() {
+    local choice bind enabled username password new_username new_password confirm temporary
+    require_config
+    if [ "$DOCKER_MODE" != "1" ]; then
+        echo "原生模式请在 Web 网络设置中配置代理监听和认证。"
+        return 1
+    fi
+    echo "1) 仅本机使用 (127.0.0.1)"
+    echo "2) 公网使用 (0.0.0.0，强制启用认证)"
+    read -r -p "代理发布范围 [1-2，默认1]: " choice
+    case "${choice:-1}" in
+        2) bind="0.0.0.0"; enabled=true ;;
+        *) bind="127.0.0.1"; enabled=false ;;
+    esac
+    username=$(json_value proxy_username)
+    password=$(json_value proxy_password)
+    if [ "$enabled" = "true" ]; then
+        read -r -p "代理用户名 [${username}]: " new_username
+        username=${new_username:-$username}
+        [ -n "$username" ] || { echo "公网代理用户名不能为空。"; return 1; }
+        read -r -s -p "代理密码 [回车保留当前密码]: " new_password
+        echo
+        if [ -n "$new_password" ]; then
+            read -r -s -p "再次输入代理密码: " confirm
+            echo
+            [ "$new_password" = "$confirm" ] || { echo "两次密码不一致。"; return 1; }
+            password="$new_password"
+        fi
+        [ -n "$password" ] || { echo "公网代理密码不能为空。"; return 1; }
+    fi
+    temporary=$(mktemp)
+    jq --arg username "$username" --arg password "$password" --argjson enabled "$enabled" '
+        .proxy_auth_enabled = $enabled |
+        .proxy_username = $username |
+        .proxy_password = $password
+    ' "$AUTH_FILE" > "$temporary"
+    install -m 600 "$temporary" "$AUTH_FILE"
+    rm -f "$temporary"
+    set_compose_env_value GATEPILOT_PROXY_BIND "$bind"
+    service_action restart
+    echo "代理发布和认证配置已保存并重建容器。"
+    show_info
+}
+
 configure_routing() {
     local choice mode country ip_choice ip_type fixed_id temporary
     require_config
@@ -342,7 +393,7 @@ configure_routing() {
 update_service() {
     git -C "$INSTALL_DIR" pull --ff-only
     if [ "$DOCKER_MODE" = "1" ]; then
-        (cd "$INSTALL_DIR" && compose pull && compose up -d --remove-orphans)
+        (cd "$INSTALL_DIR" && compose pull && compose up -d --remove-orphans --force-recreate)
     else
         (cd "$INSTALL_DIR" && go build -trimpath -ldflags="-s -w" -o gatepilot.new .)
         install -m 755 "$INSTALL_DIR/gatepilot.new" "$INSTALL_DIR/gatepilot"
@@ -387,14 +438,16 @@ interactive_menu() {
         echo "3) 重启服务       4) 查看日志"
         echo "5) 网页配置       6) 端口配置"
         echo "7) 账号密码       8) 路由配置"
-        echo "9) 一键更新      10) 完全卸载"
+        echo "9) 代理发布      10) 一键更新"
+        echo "11) 完全卸载"
         echo "0) 退出"
         read -r -p "请选择: " choice
         case "$choice" in
             1) service_action start ;; 2) service_action stop ;; 3) service_action restart ;;
             4) show_logs ;; 5) configure_web ;; 6) configure_ports ;;
-            7) configure_credentials ;; 8) configure_routing ;; 9) update_service ;;
-            10) uninstall_service; return ;; 0) return ;; *) echo "无效选择。" ;;
+            7) configure_credentials ;; 8) configure_routing ;; 9) configure_proxy ;;
+            10) update_service ;; 11) uninstall_service; return ;;
+            0) return ;; *) echo "无效选择。" ;;
         esac
         read -r -p "按回车键继续..." _
     done
@@ -411,6 +464,7 @@ case "${1:-menu}" in
     port) configure_ports ;;
     password) configure_credentials ;;
     routing) configure_routing ;;
+    proxy) configure_proxy ;;
     uninstall) uninstall_service ;;
-    *) echo "用法: ml {info|status|logs|start|stop|restart|update|web|port|password|routing|uninstall}"; exit 1 ;;
+    *) echo "用法: ml {info|status|logs|start|stop|restart|update|web|port|password|routing|proxy|uninstall}"; exit 1 ;;
 esac

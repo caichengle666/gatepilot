@@ -110,7 +110,7 @@ docker compose up -d
 docker compose logs -f gatepilot
 ```
 
-默认发布 Web 端口 `8787`，代理端口仅绑定宿主机 `127.0.0.1:7928`。持久化数据保存在当前目录的 `data/`。首次启动的管理地址、用户名和密码可通过日志查看，也保存在 `data/ui_auth.json`。
+默认发布 Web 端口 `8787`，代理端口仅绑定宿主机 `127.0.0.1:7928`。安装向导或 `ml proxy` 可将代理发布到公网；公网模式强制启用用户名密码认证。持久化数据保存在当前目录的 `data/`，Compose 发布配置保存在 `.env`。首次启动的管理地址、用户名和密码可通过日志查看，也保存在 `data/ui_auth.json`。
 
 Docker 镜像只包含 Linux 共享代码和 Linux OpenVPN，不包含 Windows OpenVPN 二进制。
 
