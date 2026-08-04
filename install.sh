@@ -511,4 +511,4 @@ echo -e "管理地址: ${BLUE}http://${WEB_HOST}:${WEB_PORT}/$(json_value secret
 echo -e "用户名: ${YELLOW}$(json_value username)${PLAIN}"
 echo -e "密码: ${YELLOW}$(json_value password)${PLAIN}"
 echo -e "本地 HTTP/SOCKS5 代理: ${BLUE}127.0.0.1:${PROXY_PORT}${PLAIN}"
-echo "管理命令: ml（交互菜单）或 ml info | status | logs | restart | update | web | port | password | routing"
+echo "管理命令: ml（交互菜单）或 ml info | status | logs | restart | update-script | update-image | update"

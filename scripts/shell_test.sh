@@ -108,6 +108,35 @@ PROMPT_FD=3
 read_prompt -r prompt_value
 [ "$prompt_value" = "docker" ]
 
+UPDATE_LOG="$TEST_DIR/update.log"
+git() {
+    printf 'git %s\n' "$*" >> "$UPDATE_LOG"
+}
+install() {
+    printf 'install %s\n' "$*" >> "$UPDATE_LOG"
+}
+compose() {
+    printf 'compose %s\n' "$*" >> "$UPDATE_LOG"
+}
+configure_docker_firewall() {
+    printf 'firewall sync\n' >> "$UPDATE_LOG"
+}
+
+update_scripts
+grep -F "git -C $TEST_DIR pull --ff-only" "$UPDATE_LOG" >/dev/null
+grep -F "install -m 755 $TEST_DIR/scripts/ml.sh /usr/local/bin/ml" "$UPDATE_LOG" >/dev/null
+if grep -F 'compose ' "$UPDATE_LOG" >/dev/null; then
+    echo "单独更新管理脚本时不应操作容器"
+    exit 1
+fi
+
+: > "$UPDATE_LOG"
+DOCKER_MODE=1
+update_image
+grep -F 'compose pull gatepilot' "$UPDATE_LOG" >/dev/null
+grep -F 'compose up -d --remove-orphans --force-recreate gatepilot' "$UPDATE_LOG" >/dev/null
+grep -F 'firewall sync' "$UPDATE_LOG" >/dev/null
+
 bash -n "$ROOT_DIR/install.sh"
 bash -n "$ROOT_DIR/scripts/ml.sh"
 echo "Shell tests passed"

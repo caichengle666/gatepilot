@@ -90,6 +90,8 @@ ml info
 ml status
 ml logs
 ml restart
+ml update-script
+ml update-image
 ml update
 ml web
 ml port
@@ -97,7 +99,7 @@ ml password
 ml routing
 ```
 
-直接执行 `ml` 会打开交互式管理菜单，可启动、停止、重启、查看日志、更新程序，以及修改网页绑定、安全路径、端口、账号密码和节点路由策略。管理脚本为 Bash，不再依赖 Python。
+`ml update-script` 只从 GitHub 更新管理脚本，`ml update-image` 只拉取最新 Docker 镜像并重建容器，`ml update` 同时更新代码和运行程序。直接执行 `ml` 会打开交互式管理菜单，可启动、停止、重启、查看日志、更新程序，以及修改网页绑定、安全路径、端口、账号密码和节点路由策略。管理脚本为 Bash，不再依赖 Python。
 
 ## Docker Compose
 

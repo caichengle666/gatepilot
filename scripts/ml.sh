@@ -453,18 +453,30 @@ configure_routing() {
     echo "路由配置已保存并重启服务。"
 }
 
-update_service() {
+update_scripts() {
     git -C "$INSTALL_DIR" pull --ff-only
+    install -m 755 "$INSTALL_DIR/scripts/ml.sh" /usr/local/bin/ml
+    echo "管理脚本已从 GitHub 更新。"
+}
+
+update_image() {
+    if [ "$DOCKER_MODE" != "1" ]; then
+        echo "镜像更新仅适用于 Docker 安装模式。"
+        return 1
+    fi
+    (cd "$INSTALL_DIR" && compose pull gatepilot && compose up -d --remove-orphans --force-recreate gatepilot)
+    configure_docker_firewall
+    echo "Docker 镜像已拉取并重建容器。"
+}
+
+update_service() {
+    update_scripts
     if [ "$DOCKER_MODE" = "1" ]; then
-        (cd "$INSTALL_DIR" && compose pull && compose up -d --remove-orphans --force-recreate)
-        configure_docker_firewall
+        update_image
     else
         (cd "$INSTALL_DIR" && go build -trimpath -ldflags="-s -w" -o gatepilot.new .)
         install -m 755 "$INSTALL_DIR/gatepilot.new" "$INSTALL_DIR/gatepilot"
         rm -f "$INSTALL_DIR/gatepilot.new"
-    fi
-    install -m 755 "$INSTALL_DIR/scripts/ml.sh" /usr/local/bin/ml
-    if [ "$DOCKER_MODE" != "1" ]; then
         service_action restart
     fi
     echo "更新完成。"
@@ -504,15 +516,17 @@ interactive_menu() {
         echo "3) 重启服务       4) 查看日志"
         echo "5) 网页配置       6) 端口配置"
         echo "7) 账号密码       8) 路由配置"
-        echo "9) 代理发布      10) 一键更新"
-        echo "11) 完全卸载"
+        echo "9) 代理发布      10) 更新管理脚本"
+        echo "11) 更新 Docker 镜像"
+        echo "12) 完整更新     13) 完全卸载"
         echo "0) 退出"
         read -r -p "请选择: " choice
         case "$choice" in
             1) service_action start ;; 2) service_action stop ;; 3) service_action restart ;;
             4) show_logs ;; 5) configure_web ;; 6) configure_ports ;;
             7) configure_credentials ;; 8) configure_routing ;; 9) configure_proxy ;;
-            10) update_service ;; 11) uninstall_service; return ;;
+            10) update_scripts ;; 11) update_image ;; 12) update_service ;;
+            13) uninstall_service; return ;;
             0) return ;; *) echo "无效选择。" ;;
         esac
         read -r -p "按回车键继续..." _
@@ -530,11 +544,13 @@ case "${1:-menu}" in
     logs) show_logs ;;
     start|stop|restart) service_action "$1" ;;
     update) update_service ;;
+    update-script) update_scripts ;;
+    update-image) update_image ;;
     web) configure_web ;;
     port) configure_ports ;;
     password) configure_credentials ;;
     routing) configure_routing ;;
     proxy) configure_proxy ;;
     uninstall) uninstall_service ;;
-    *) echo "用法: ml {info|status|logs|start|stop|restart|update|web|port|password|routing|proxy|uninstall}"; exit 1 ;;
+    *) echo "用法: ml {info|status|logs|start|stop|restart|update|update-script|update-image|web|port|password|routing|proxy|uninstall}"; exit 1 ;;
 esac
