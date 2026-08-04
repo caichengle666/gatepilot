@@ -151,6 +151,34 @@ set_compose_env_value() {
     rm -f "$temporary"
 }
 
+persist_firewall_rules() {
+    if command -v netfilter-persistent >/dev/null 2>&1; then
+        netfilter-persistent save >/dev/null 2>&1 || true
+    elif [ -d /etc/iptables ] && command -v iptables-save >/dev/null 2>&1; then
+        iptables-save > /etc/iptables/rules.v4
+    fi
+}
+
+allow_forwarded_tcp_port() {
+    local port="$1" reject_line
+    command -v iptables >/dev/null 2>&1 || return 0
+    iptables -C FORWARD -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1 && return 0
+    reject_line=$(iptables -L FORWARD -n --line-numbers 2>/dev/null | awk '$2 == "REJECT" { print $1; exit }')
+    [ -n "$reject_line" ] || return 0
+    iptables -I FORWARD "$reject_line" -p tcp --dport "$port" -j ACCEPT
+    persist_firewall_rules
+}
+
+configure_docker_firewall() {
+    local web_bind web_port proxy_bind proxy_port
+    web_bind=$(compose_env_value GATEPILOT_UI_BIND 0.0.0.0)
+    web_port=$(compose_env_value GATEPILOT_UI_PORT 8787)
+    proxy_bind=$(compose_env_value GATEPILOT_PROXY_BIND 127.0.0.1)
+    proxy_port=$(compose_env_value GATEPILOT_PROXY_PORT 7928)
+    [ "$web_bind" = "127.0.0.1" ] || allow_forwarded_tcp_port "$web_port"
+    [ "$proxy_bind" = "127.0.0.1" ] || allow_forwarded_tcp_port "$proxy_port"
+}
+
 valid_port() {
     [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
 }
@@ -167,6 +195,7 @@ wait_for_auth_file() {
 restart_gatepilot() {
     if [ "$INSTALL_MODE" = "docker" ]; then
         (cd "$INSTALL_DIR" && compose up -d --force-recreate)
+        configure_docker_firewall
         return
     fi
     if command -v systemctl >/dev/null 2>&1; then
@@ -346,6 +375,7 @@ if [ "$INSTALL_MODE" = "docker" ]; then
     cd "$INSTALL_DIR"
     compose pull
     compose up -d --remove-orphans
+    configure_docker_firewall
 else
     if [ -f "$INSTALL_DIR/.docker_install" ]; then
         (cd "$INSTALL_DIR" && compose down --remove-orphans) || true
