@@ -45,6 +45,10 @@ func waitForVPNReady(timeout time.Duration) error {
 	return errors.New("tun0 未就绪，请确认以 root 运行并启用 /dev/net/tun")
 }
 func cleanupPolicyRouting() {
-	_ = exec.Command("ip", "rule", "del", "table", "100").Run()
+	for {
+		if err := exec.Command("ip", "rule", "del", "oif", "tun0", "table", "100").Run(); err != nil {
+			break
+		}
+	}
 	_ = exec.Command("ip", "route", "flush", "table", "100").Run()
 }
