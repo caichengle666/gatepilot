@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+
+if [ -z "${BASH_VERSION:-}" ]; then
+    echo "错误: install.sh 需要 bash 运行，请使用: curl ... | bash"
+    exit 1
+fi
+
 set -euo pipefail
 
 RED='\033[0;31m'
