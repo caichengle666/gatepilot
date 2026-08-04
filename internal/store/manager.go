@@ -81,6 +81,7 @@ func (s *Store) RefreshNodes(ctx context.Context) (string, error) {
 			nodes[index].LatencyMS = old.LatencyMS
 		}
 	}
+	nodes = retainActiveNode(nodes, oldNodes, activeID)
 	nodes = SortNodes(nodes)
 	s.Nodes = nodes
 	s.mu.Unlock()
@@ -101,6 +102,23 @@ func (s *Store) RefreshNodes(ctx context.Context) (string, error) {
 	})
 	s.LogEvent("info", "Main", message)
 	return message, nil
+}
+
+func retainActiveNode(nodes []Node, oldNodes map[string]Node, activeID string) []Node {
+	if activeID == "" {
+		return nodes
+	}
+	for _, candidate := range nodes {
+		if candidate.ID == activeID {
+			return nodes
+		}
+	}
+	active, found := oldNodes[activeID]
+	if !found {
+		return nodes
+	}
+	active.Active = true
+	return append(nodes, active)
 }
 
 func (s *Store) fetchCandidates(ctx context.Context) ([]Node, string, error) {
