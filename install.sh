@@ -13,6 +13,18 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;36m'
 PLAIN='\033[0m'
 
+PROMPT_FD=""
+if [ -t 0 ]; then
+    PROMPT_FD=0
+elif { exec 3</dev/tty; } 2>/dev/null; then
+    PROMPT_FD=3
+fi
+
+read_prompt() {
+    [ -n "$PROMPT_FD" ] || return 1
+    read "$@" <&"$PROMPT_FD"
+}
+
 if [ "$(id -u)" != "0" ]; then
     echo -e "${RED}错误: 请使用 root 权限运行。${PLAIN}"
     exit 1
@@ -32,10 +44,10 @@ if [ -f "$INSTALL_DIR/.docker_install" ]; then
     DEFAULT_INSTALL_CHOICE="2"
 fi
 INSTALL_MODE="${GATEPILOT_INSTALL_MODE:-}"
-if [ -z "$INSTALL_MODE" ] && [ -t 0 ]; then
+if [ -z "$INSTALL_MODE" ] && [ -n "$PROMPT_FD" ]; then
     echo "1) 原生安装（systemd/OpenRC）"
     echo "2) Docker Compose 安装"
-    read -r -p "安装方式 [1-2，默认${DEFAULT_INSTALL_CHOICE}]: " install_choice
+    read_prompt -r -p "安装方式 [1-2，默认${DEFAULT_INSTALL_CHOICE}]: " install_choice
     case "${install_choice:-$DEFAULT_INSTALL_CHOICE}" in
         2) INSTALL_MODE="docker" ;;
         *) INSTALL_MODE="native" ;;
@@ -165,24 +177,54 @@ persist_firewall_rules() {
     fi
 }
 
-allow_forwarded_tcp_port() {
-    local port="$1" reject_line
+remove_gatepilot_firewall() {
     command -v iptables >/dev/null 2>&1 || return 0
-    iptables -C FORWARD -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1 && return 0
-    reject_line=$(iptables -L FORWARD -n --line-numbers 2>/dev/null | awk '$2 == "REJECT" { print $1; exit }')
-    [ -n "$reject_line" ] || return 0
-    iptables -I FORWARD "$reject_line" -p tcp --dport "$port" -j ACCEPT
-    persist_firewall_rules
+    while iptables -C FORWARD -j GATEPILOT >/dev/null 2>&1; do
+        iptables -D FORWARD -j GATEPILOT
+    done
+    if iptables -nL GATEPILOT >/dev/null 2>&1; then
+        iptables -F GATEPILOT
+        iptables -X GATEPILOT
+    fi
 }
 
 configure_docker_firewall() {
-    local web_bind web_port proxy_bind proxy_port
+    local web_bind web_port proxy_bind proxy_port reject_line migration_marker
+    local -a public_ports=()
+    command -v iptables >/dev/null 2>&1 || return 0
     web_bind=$(compose_env_value GATEPILOT_UI_BIND 0.0.0.0)
     web_port=$(compose_env_value GATEPILOT_UI_PORT 8787)
     proxy_bind=$(compose_env_value GATEPILOT_PROXY_BIND 127.0.0.1)
     proxy_port=$(compose_env_value GATEPILOT_PROXY_PORT 7928)
-    [ "$web_bind" = "127.0.0.1" ] || allow_forwarded_tcp_port "$web_port"
-    [ "$proxy_bind" = "127.0.0.1" ] || allow_forwarded_tcp_port "$proxy_port"
+    migration_marker="$INSTALL_DIR/data/.firewall_chain_migrated"
+    if [ ! -f "$migration_marker" ]; then
+        while iptables -C FORWARD -p tcp --dport "$web_port" -j ACCEPT >/dev/null 2>&1; do
+            iptables -D FORWARD -p tcp --dport "$web_port" -j ACCEPT
+        done
+        while iptables -C FORWARD -p tcp --dport "$proxy_port" -j ACCEPT >/dev/null 2>&1; do
+            iptables -D FORWARD -p tcp --dport "$proxy_port" -j ACCEPT
+        done
+        mkdir -p "$(dirname "$migration_marker")"
+        : > "$migration_marker"
+    fi
+    [ "$web_bind" = "127.0.0.1" ] || public_ports+=("$web_port")
+    [ "$proxy_bind" = "127.0.0.1" ] || public_ports+=("$proxy_port")
+    remove_gatepilot_firewall
+    if [ "${#public_ports[@]}" -eq 0 ]; then
+        persist_firewall_rules
+        return 0
+    fi
+    reject_line=$(iptables -L FORWARD -n --line-numbers 2>/dev/null | awk '$2 == "REJECT" { print $1; exit }')
+    if [ -z "$reject_line" ]; then
+        persist_firewall_rules
+        return 0
+    fi
+    iptables -N GATEPILOT
+    for port in "${public_ports[@]}"; do
+        iptables -A GATEPILOT -p tcp --dport "$port" -j ACCEPT
+    done
+    iptables -I FORWARD "$reject_line" -j GATEPILOT
+    persist_firewall_rules
 }
 
 valid_port() {
@@ -229,14 +271,14 @@ configure_initial_settings() {
     current_suffix=$(jq -r '.secret_path // empty' "$AUTH_FILE")
 
     echo -e "${BLUE}首次安装配置向导${PLAIN}"
-    read -r -p "管理用户名 [${current_username}]: " username
+    read_prompt -r -p "管理用户名 [${current_username}]: " username
     username=${username:-$current_username}
 
     while true; do
-        read -r -s -p "管理密码 [回车保留随机密码]: " password
+        read_prompt -r -s -p "管理密码 [回车保留随机密码]: " password
         echo
         [ -z "$password" ] && break
-        read -r -s -p "再次输入管理密码: " confirm
+        read_prompt -r -s -p "再次输入管理密码: " confirm
         echo
         [ "$password" = "$confirm" ] && break
         echo -e "${RED}两次密码不一致，请重新输入。${PLAIN}"
@@ -245,7 +287,7 @@ configure_initial_settings() {
     if [ "$INSTALL_MODE" = "docker" ]; then
         echo "1) 仅本机访问 (127.0.0.1)"
         echo "2) 公网 IPv4 (0.0.0.0)"
-        read -r -p "Web 发布范围 [1-2，默认2]: " bind_choice
+        read_prompt -r -p "Web 发布范围 [1-2，默认2]: " bind_choice
         case "${bind_choice:-2}" in
             1) host_bind="127.0.0.1" ;;
             *) host_bind="0.0.0.0" ;;
@@ -255,7 +297,7 @@ configure_initial_settings() {
         echo "1) 仅本机访问 (127.0.0.1)"
         echo "2) 公网 IPv4 (0.0.0.0)"
         echo "3) 公网 IPv4/IPv6 (::)"
-        read -r -p "Web 绑定方式 [1-3，默认2]: " bind_choice
+        read_prompt -r -p "Web 绑定方式 [1-3，默认2]: " bind_choice
         case "${bind_choice:-2}" in
             1) host="127.0.0.1" ;;
             3) host="::" ;;
@@ -263,42 +305,42 @@ configure_initial_settings() {
         esac
     fi
 
-    read -r -p "Web 管理端口 [${current_port}]: " web_port
+    read_prompt -r -p "Web 管理端口 [${current_port}]: " web_port
     web_port=${web_port:-$current_port}
     while ! valid_port "$web_port"; do
-        read -r -p "端口无效，请重新输入 Web 管理端口: " web_port
+        read_prompt -r -p "端口无效，请重新输入 Web 管理端口: " web_port
     done
 
-    read -r -p "本地 HTTP/SOCKS5 代理端口 [${current_proxy_port}]: " proxy_port
+    read_prompt -r -p "本地 HTTP/SOCKS5 代理端口 [${current_proxy_port}]: " proxy_port
     proxy_port=${proxy_port:-$current_proxy_port}
     while ! valid_port "$proxy_port" || [ "$proxy_port" = "$web_port" ]; do
-        read -r -p "端口无效或与 Web 端口冲突，请重新输入代理端口: " proxy_port
+        read_prompt -r -p "端口无效或与 Web 端口冲突，请重新输入代理端口: " proxy_port
     done
 
     proxy_bind="127.0.0.1"
     if [ "$INSTALL_MODE" = "docker" ]; then
         echo "1) 仅本机使用代理 (127.0.0.1)"
         echo "2) 公网使用代理 (0.0.0.0，强制启用认证)"
-        read -r -p "代理发布范围 [1-2，默认1]: " proxy_bind_choice
+        read_prompt -r -p "代理发布范围 [1-2，默认1]: " proxy_bind_choice
         case "${proxy_bind_choice:-1}" in
             2) proxy_bind="0.0.0.0" ;;
         esac
     fi
 
-    read -r -p "Web 安全路径 [${current_suffix}，输入 random 重新生成]: " suffix
+    read_prompt -r -p "Web 安全路径 [${current_suffix}，输入 random 重新生成]: " suffix
     suffix=${suffix:-$current_suffix}
     if [ "$suffix" = "random" ]; then
         suffix=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 12 || true)
     fi
     while [[ ! "$suffix" =~ ^[A-Za-z0-9]+$ ]]; do
-        read -r -p "安全路径只能包含字母和数字，请重新输入: " suffix
+        read_prompt -r -p "安全路径只能包含字母和数字，请重新输入: " suffix
     done
 
     if [ "$proxy_bind" = "0.0.0.0" ]; then
         echo "公网代理必须启用用户名密码认证。"
         proxy_auth_choice="y"
     else
-        read -r -p "启用本地代理用户名密码认证？[y/N]: " proxy_auth_choice
+        read_prompt -r -p "启用本地代理用户名密码认证？[y/N]: " proxy_auth_choice
     fi
     proxy_auth_enabled=false
     proxy_username=""
@@ -306,17 +348,17 @@ configure_initial_settings() {
     if [[ "$proxy_auth_choice" =~ ^[Yy]$ ]]; then
         proxy_auth_enabled=true
         while [ -z "$proxy_username" ]; do
-            read -r -p "代理用户名: " proxy_username
+            read_prompt -r -p "代理用户名: " proxy_username
         done
         while [ -z "$proxy_password" ]; do
-            read -r -s -p "代理密码: " proxy_password
+            read_prompt -r -s -p "代理密码: " proxy_password
             echo
         done
     fi
 
-    read -r -p "前置代理 [可留空，例如 socks5://127.0.0.1:1080]: " upstream_proxy
+    read_prompt -r -p "前置代理 [可留空，例如 socks5://127.0.0.1:1080]: " upstream_proxy
     while [ -n "$upstream_proxy" ] && [[ ! "$upstream_proxy" =~ ^(http|https|socks|socks5):// ]]; do
-        read -r -p "前置代理协议无效，请重新输入或留空: " upstream_proxy
+        read_prompt -r -p "前置代理协议无效，请重新输入或留空: " upstream_proxy
     done
 
     config_web_port="$web_port"
@@ -384,6 +426,8 @@ if [ "$INSTALL_MODE" = "docker" ]; then
     configure_docker_firewall
 else
     if [ -f "$INSTALL_DIR/.docker_install" ]; then
+        remove_gatepilot_firewall
+        persist_firewall_rules
         (cd "$INSTALL_DIR" && compose down --remove-orphans) || true
         rm -f "$INSTALL_DIR/.docker_install"
     fi
@@ -437,7 +481,7 @@ install -m 755 "$INSTALL_DIR/scripts/ml.sh" /usr/local/bin/ml
 if ! wait_for_auth_file; then
     echo -e "${YELLOW}服务已启动，但配置文件尚未生成，请稍后运行 ml 检查状态。${PLAIN}"
 fi
-if [ "$FIRST_INSTALL" = "1" ] && [ -t 0 ] && [ "${GATEPILOT_SKIP_WIZARD:-0}" != "1" ]; then
+if [ "$FIRST_INSTALL" = "1" ] && [ -n "$PROMPT_FD" ] && [ "${GATEPILOT_SKIP_WIZARD:-0}" != "1" ]; then
     configure_initial_settings
 fi
 

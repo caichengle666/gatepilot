@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -u
 
+ML_SOURCED=0
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+    ML_SOURCED=1
+fi
+
 INSTALL_DIR="${GATEPILOT_INSTALL_DIR:-${AIMILIVPN_INSTALL_DIR:-/opt/gatepilot}}"
 SERVICE_NAME="gatepilot"
 DOCKER_MODE=0
@@ -13,7 +18,7 @@ else
     STATE_FILE="$INSTALL_DIR/vpngate_data/state.json"
 fi
 
-if [ "$(id -u)" != "0" ]; then
+if [ "$ML_SOURCED" != "1" ] && [ "$(id -u)" != "0" ]; then
     echo "错误: 必须使用 root 权限运行 ml。"
     exit 1
 fi
@@ -56,24 +61,54 @@ persist_firewall_rules() {
     fi
 }
 
-allow_forwarded_tcp_port() {
-    local port="$1" reject_line
+remove_gatepilot_firewall() {
     command -v iptables >/dev/null 2>&1 || return 0
-    iptables -C FORWARD -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1 && return 0
-    reject_line=$(iptables -L FORWARD -n --line-numbers 2>/dev/null | awk '$2 == "REJECT" { print $1; exit }')
-    [ -n "$reject_line" ] || return 0
-    iptables -I FORWARD "$reject_line" -p tcp --dport "$port" -j ACCEPT
-    persist_firewall_rules
+    while iptables -C FORWARD -j GATEPILOT >/dev/null 2>&1; do
+        iptables -D FORWARD -j GATEPILOT
+    done
+    if iptables -nL GATEPILOT >/dev/null 2>&1; then
+        iptables -F GATEPILOT
+        iptables -X GATEPILOT
+    fi
 }
 
 configure_docker_firewall() {
-    local web_bind web_port proxy_bind proxy_port
+    local web_bind web_port proxy_bind proxy_port reject_line migration_marker
+    local -a public_ports=()
+    command -v iptables >/dev/null 2>&1 || return 0
     web_bind=$(compose_env_value GATEPILOT_UI_BIND 0.0.0.0)
     web_port=$(compose_env_value GATEPILOT_UI_PORT 8787)
     proxy_bind=$(compose_env_value GATEPILOT_PROXY_BIND 127.0.0.1)
     proxy_port=$(compose_env_value GATEPILOT_PROXY_PORT 7928)
-    [ "$web_bind" = "127.0.0.1" ] || allow_forwarded_tcp_port "$web_port"
-    [ "$proxy_bind" = "127.0.0.1" ] || allow_forwarded_tcp_port "$proxy_port"
+    migration_marker="$INSTALL_DIR/data/.firewall_chain_migrated"
+    if [ ! -f "$migration_marker" ]; then
+        while iptables -C FORWARD -p tcp --dport "$web_port" -j ACCEPT >/dev/null 2>&1; do
+            iptables -D FORWARD -p tcp --dport "$web_port" -j ACCEPT
+        done
+        while iptables -C FORWARD -p tcp --dport "$proxy_port" -j ACCEPT >/dev/null 2>&1; do
+            iptables -D FORWARD -p tcp --dport "$proxy_port" -j ACCEPT
+        done
+        mkdir -p "$(dirname "$migration_marker")"
+        : > "$migration_marker"
+    fi
+    [ "$web_bind" = "127.0.0.1" ] || public_ports+=("$web_port")
+    [ "$proxy_bind" = "127.0.0.1" ] || public_ports+=("$proxy_port")
+    remove_gatepilot_firewall
+    if [ "${#public_ports[@]}" -eq 0 ]; then
+        persist_firewall_rules
+        return 0
+    fi
+    reject_line=$(iptables -L FORWARD -n --line-numbers 2>/dev/null | awk '$2 == "REJECT" { print $1; exit }')
+    if [ -z "$reject_line" ]; then
+        persist_firewall_rules
+        return 0
+    fi
+    iptables -N GATEPILOT
+    for port in "${public_ports[@]}"; do
+        iptables -A GATEPILOT -p tcp --dport "$port" -j ACCEPT
+    done
+    iptables -I FORWARD "$reject_line" -j GATEPILOT
+    persist_firewall_rules
 }
 
 service_action() {
@@ -445,6 +480,8 @@ uninstall_service() {
     service_action stop || true
     if [ "$DOCKER_MODE" = "1" ]; then
         (cd "$INSTALL_DIR" && compose down --remove-orphans) || true
+        remove_gatepilot_firewall
+        persist_firewall_rules
     elif command -v systemctl >/dev/null 2>&1; then
         systemctl disable "$SERVICE_NAME.service" || true
         rm -f "/etc/systemd/system/$SERVICE_NAME.service" "/lib/systemd/system/$SERVICE_NAME.service"
@@ -481,6 +518,10 @@ interactive_menu() {
         read -r -p "按回车键继续..." _
     done
 }
+
+if [ "$ML_SOURCED" = "1" ]; then
+    return 0
+fi
 
 case "${1:-menu}" in
     menu) interactive_menu ;;
