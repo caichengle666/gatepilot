@@ -1,6 +1,6 @@
 services:
   gatepilot:
-    image: ghcr.io/caichengle666/gatepilot:latest
+    image: ${GATEPILOT_IMAGE:-ghcr.io/caichengle666/gatepilot:latest}
     build:
       context: .
     container_name: gatepilot

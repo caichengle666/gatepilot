@@ -141,6 +141,14 @@ func (a *Application) restartServer() {
 }
 
 func (a *Application) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if request.URL.Path == "/healthz" {
+		if request.Method != http.MethodGet {
+			writer.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
 	ui, _, _ := a.Store.Snapshot()
 	if request.URL.Path == "/"+strings.Trim(ui.SecretPath, "/") {
 		http.Redirect(writer, request, request.URL.Path+"/", http.StatusFound)

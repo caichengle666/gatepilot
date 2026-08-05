@@ -103,7 +103,8 @@ jobs:
             type=ref,event=branch
             type=ref,event=tag
             type=sha
-      - uses: docker/build-push-action@v7
+      - id: docker_build
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
@@ -112,6 +113,23 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Docker health smoke test
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}@${{ steps.docker_build.outputs.digest }}
+        run: |
+          docker run -d --name gatepilot-smoke \
+            -e DISABLE_BACKGROUND_FETCH=true \
+            -e LOCAL_PROXY_HOST=127.0.0.1 \
+            -e LOCAL_PROXY_BIND_TUN=false \
+            "$IMAGE"
+          trap 'docker logs gatepilot-smoke; docker rm -f gatepilot-smoke' EXIT
+          for attempt in $(seq 1 18); do
+            status=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' gatepilot-smoke)
+            [ "$status" = "healthy" ] && exit 0
+            [ "$status" = "unhealthy" ] && exit 1
+            sleep 5
+          done
+          exit 1
 
   release:
     needs: binaries

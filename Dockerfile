@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/gatepil
 FROM debian:bookworm-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates iproute2 openvpn procps \
+    && apt-get install -y --no-install-recommends ca-certificates curl iproute2 openvpn procps \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /out/gatepilot /usr/local/bin/gatepilot
@@ -29,5 +29,8 @@ ENV VPNGATE_DATA_DIR=/var/lib/gatepilot \
 
 VOLUME ["/var/lib/gatepilot"]
 EXPOSE 8787 7928
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=6 \
+    CMD curl -fsS "http://127.0.0.1:${UI_PORT:-8787}/healthz" || exit 1
 
 ENTRYPOINT ["/usr/local/bin/gatepilot"]

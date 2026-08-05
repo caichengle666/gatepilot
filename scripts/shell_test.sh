@@ -116,10 +116,24 @@ install() {
     printf 'install %s\n' "$*" >> "$UPDATE_LOG"
 }
 compose() {
-    printf 'compose %s\n' "$*" >> "$UPDATE_LOG"
+    printf 'compose image=%s %s\n' "${GATEPILOT_IMAGE:-default}" "$*" >> "$UPDATE_LOG"
+    if [ "${MOCK_COMPOSE_FAIL:-0}" = "1" ] && [ "${GATEPILOT_IMAGE:-default}" = "default" ] && [ "$1" = "up" ]; then
+        return 1
+    fi
 }
 configure_docker_firewall() {
     printf 'firewall sync\n' >> "$UPDATE_LOG"
+}
+MOCK_HEALTH="healthy"
+docker() {
+    printf 'docker %s\n' "$*" >> "$UPDATE_LOG"
+    case "$*" in
+        "inspect -f {{.Image}} gatepilot") printf 'sha256:old\n' ;;
+        "inspect -f {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} gatepilot") printf '%s\n' "$MOCK_HEALTH" ;;
+        "inspect -f {{.State.Status}} gatepilot") printf 'running\n' ;;
+        "inspect -f {{.State.Running}} gatepilot") printf 'true\n' ;;
+        "cp gatepilot:"*) printf 'geo-data\n' > "${*: -1}" ;;
+    esac
 }
 
 update_scripts
@@ -132,10 +146,34 @@ fi
 
 : > "$UPDATE_LOG"
 DOCKER_MODE=1
+export GATEPILOT_HEALTH_ATTEMPTS=1
+export GATEPILOT_HEALTH_INTERVAL=0
+export GATEPILOT_ROLLBACK_DELAY=0
 update_image
-grep -F 'compose pull gatepilot' "$UPDATE_LOG" >/dev/null
-grep -F 'compose up -d --remove-orphans --force-recreate gatepilot' "$UPDATE_LOG" >/dev/null
+grep -F 'compose image=default pull gatepilot' "$UPDATE_LOG" >/dev/null
+grep -F 'compose image=default up -d --remove-orphans --force-recreate gatepilot' "$UPDATE_LOG" >/dev/null
 grep -F 'firewall sync' "$UPDATE_LOG" >/dev/null
+[ -s "$TEST_DIR/data/geoip.dat" ]
+[ -s "$TEST_DIR/data/geosite.dat" ]
+
+: > "$UPDATE_LOG"
+MOCK_HEALTH="unhealthy"
+if update_image; then
+    echo "不健康的新镜像不应报告更新成功"
+    exit 1
+fi
+grep -F 'compose image=gatepilot-rollback:local up -d --remove-orphans --force-recreate gatepilot' "$UPDATE_LOG" >/dev/null
+grep -F 'docker image rm gatepilot-rollback:local' "$UPDATE_LOG" >/dev/null
+
+: > "$UPDATE_LOG"
+MOCK_HEALTH="healthy"
+export MOCK_COMPOSE_FAIL=1
+if update_image; then
+    echo "容器重建失败时不应报告更新成功"
+    exit 1
+fi
+grep -F 'compose image=gatepilot-rollback:local up -d --remove-orphans --force-recreate gatepilot' "$UPDATE_LOG" >/dev/null
+unset MOCK_COMPOSE_FAIL
 
 bash -n "$ROOT_DIR/install.sh"
 bash -n "$ROOT_DIR/scripts/ml.sh"

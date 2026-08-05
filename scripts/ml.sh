@@ -459,13 +459,72 @@ update_scripts() {
     echo "管理脚本已从 GitHub 更新。"
 }
 
+persist_container_geo_files() {
+    local kind target
+    for kind in geoip geosite; do
+        target="$INSTALL_DIR/data/${kind}.dat"
+        if [ ! -s "$target" ]; then
+            docker cp "$SERVICE_NAME:/usr/local/bin/${kind}.dat" "$target" >/dev/null 2>&1 || true
+        fi
+    done
+}
+
+wait_for_container_health() {
+    local attempt health status
+    for ((attempt = 1; attempt <= ${GATEPILOT_HEALTH_ATTEMPTS:-24}; attempt++)); do
+        health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$SERVICE_NAME" 2>/dev/null || true)
+        status=$(docker inspect -f '{{.State.Status}}' "$SERVICE_NAME" 2>/dev/null || true)
+        [ "$health" = "healthy" ] && return 0
+        case "$status" in
+            exited|dead|restarting) return 1 ;;
+        esac
+        sleep "${GATEPILOT_HEALTH_INTERVAL:-5}"
+    done
+    return 1
+}
+
+restore_previous_image() {
+    local rollback_image="$1"
+    (cd "$INSTALL_DIR" && GATEPILOT_IMAGE="$rollback_image" compose up -d --remove-orphans --force-recreate gatepilot) || return 1
+    sleep "${GATEPILOT_ROLLBACK_DELAY:-5}"
+    [ "$(docker inspect -f '{{.State.Running}}' "$SERVICE_NAME" 2>/dev/null)" = "true" ]
+}
+
 update_image() {
+    local old_image rollback_image="gatepilot-rollback:local"
     if [ "$DOCKER_MODE" != "1" ]; then
         echo "镜像更新仅适用于 Docker 安装模式。"
         return 1
     fi
-    (cd "$INSTALL_DIR" && compose pull gatepilot && compose up -d --remove-orphans --force-recreate gatepilot)
+    old_image=$(docker inspect -f '{{.Image}}' "$SERVICE_NAME" 2>/dev/null || true)
+    if [ -n "$old_image" ]; then
+        docker image rm "$rollback_image" >/dev/null 2>&1 || true
+        docker tag "$old_image" "$rollback_image"
+    fi
+    persist_container_geo_files
+    if ! (cd "$INSTALL_DIR" && compose pull gatepilot && compose up -d --remove-orphans --force-recreate gatepilot); then
+        echo "镜像拉取或容器重建失败，正在恢复更新前镜像。"
+        if [ -n "$old_image" ] && restore_previous_image "$rollback_image"; then
+            echo "已恢复更新前镜像。"
+        fi
+        docker image rm "$rollback_image" >/dev/null 2>&1 || true
+        return 1
+    fi
     configure_docker_firewall
+    if ! wait_for_container_health; then
+        echo "新镜像健康检查失败，正在恢复更新前镜像。"
+        docker logs --tail 80 "$SERVICE_NAME" 2>&1 || true
+        if [ -n "$old_image" ]; then
+            if restore_previous_image "$rollback_image"; then
+                echo "已恢复更新前镜像。"
+            else
+                echo "旧镜像恢复失败，请运行 docker logs gatepilot 检查。"
+            fi
+        fi
+        docker image rm "$rollback_image" >/dev/null 2>&1 || true
+        return 1
+    fi
+    docker image rm "$rollback_image" >/dev/null 2>&1 || true
     echo "Docker 镜像已拉取并重建容器。"
 }
 

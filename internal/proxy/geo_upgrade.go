@@ -97,6 +97,9 @@ func GeoStatus() map[string]map[string]string {
 
 // GeoFilePath 返回 geo 数据文件的完整路径。
 func GeoFilePath(kind string) string {
+	if dataDir := strings.TrimSpace(os.Getenv("VPNGATE_DATA_DIR")); dataDir != "" {
+		return filepath.Join(dataDir, kind+".dat")
+	}
 	executable, _ := os.Executable()
 	dir := filepath.Dir(executable)
 	return filepath.Join(dir, kind+".dat")

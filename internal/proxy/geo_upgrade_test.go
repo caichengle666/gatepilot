@@ -53,3 +53,14 @@ func TestDownloadGeoFileHTTPError(t *testing.T) {
 		t.Fatal("HTTP 404 should fail")
 	}
 }
+
+func TestGeoFilePathUsesPersistentDataDirectory(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("VPNGATE_DATA_DIR", dataDir)
+	if got := GeoFilePath("geoip"); got != filepath.Join(dataDir, "geoip.dat") {
+		t.Fatalf("geoip path = %q", got)
+	}
+	if got := GeoFilePath("geosite"); got != filepath.Join(dataDir, "geosite.dat") {
+		t.Fatalf("geosite path = %q", got)
+	}
+}

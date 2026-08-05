@@ -43,7 +43,16 @@ func TestWebLoginAndAPIs(t *testing.T) {
 	}
 	client := &http.Client{Jar: jar}
 
-	response, err := client.Get(server.URL + "/testsecret/")
+	response, err := client.Get(server.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("health endpoint returned %s", response.Status)
+	}
+
+	response, err = client.Get(server.URL + "/testsecret/")
 	if err != nil {
 		t.Fatal(err)
 	}
