@@ -24,7 +24,11 @@ func shouldRetryOpenVPNDriver(_ error) bool {
 
 func openVPNRouteArguments(routeNopull bool) []string {
 	if routeNopull {
-		return []string{"--route-nopull"}
+		return []string{
+			"--pull-filter", "ignore", "dhcp-option",
+			"--pull-filter", "ignore", "redirect-gateway",
+			"--route-nopull",
+		}
 	}
 	return []string{"--pull-filter", "ignore", "dhcp-option"}
 }

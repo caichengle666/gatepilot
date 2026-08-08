@@ -32,7 +32,54 @@ type speedTestResult struct {
 func BackgroundMaintenance(application *Application) {
 	go application.proxyChecker()
 	go application.activeNodePinger()
+	go application.tunnelHealthChecker()
 	application.collectorLoop()
+}
+
+func (a *Application) tunnelHealthChecker() {
+	time.Sleep(10 * time.Second)
+	for {
+		for _, status := range a.VPN.Tunnels() {
+			go a.checkTunnelHealth(status)
+		}
+		time.Sleep(20 * time.Second)
+	}
+}
+
+func (a *Application) checkTunnelHealth(status vpn.TunnelStatus) {
+	client := a.proxyHTTPClientForPort(status.ProxyPort, 15*time.Second)
+	var lastError error
+	for _, endpoint := range []string{"https://api.ipify.org?format=json", "https://api.ip.sb/ip"} {
+		started := time.Now()
+		response, err := client.Get(endpoint)
+		if err != nil {
+			lastError = err
+			continue
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 4096))
+		_ = response.Body.Close()
+		if readErr != nil || response.StatusCode != http.StatusOK {
+			lastError = fmt.Errorf("%s", response.Status)
+			continue
+		}
+		ip := strings.TrimSpace(string(body))
+		var payload map[string]any
+		if json.Unmarshal(body, &payload) == nil {
+			ip = fmt.Sprint(payload["ip"])
+		}
+		a.VPN.UpdateTunnelHealth(status.Device, true, ip, "代理出口正常", time.Since(started).Milliseconds())
+		return
+	}
+
+	message := "代理端口检测失败"
+	if lastError != nil {
+		message += ": " + lastError.Error()
+	}
+	a.VPN.UpdateTunnelHealth(status.Device, false, "", message, 0)
+	current, found := a.tunnelStatus(status.Device)
+	if found && current.HealthFailures >= 3 {
+		a.scheduleTunnelFailover(current, message)
+	}
 }
 
 func (a *Application) collectorLoop() {
@@ -223,8 +270,13 @@ func (a *Application) CheckProxyHealth() map[string]any {
 
 func (a *Application) proxyHTTPClient(timeout time.Duration) *http.Client {
 	ui, _, _ := a.Store.Snapshot()
+	return a.proxyHTTPClientForPort(ui.ProxyPort, timeout)
+}
+
+func (a *Application) proxyHTTPClientForPort(port int, timeout time.Duration) *http.Client {
+	ui, _, _ := a.Store.Snapshot()
 	proxyURL := &url.URL{
-		Scheme: "http", Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(ui.ProxyPort)),
+		Scheme: "http", Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
 	}
 	proxyUser, proxyPassword, enabled := store.ProxyCredentials(ui)
 	if enabled {

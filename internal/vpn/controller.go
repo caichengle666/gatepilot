@@ -31,7 +31,7 @@ type Controller struct {
 	versionOnce   sync.Once
 	version       float64
 	tunnels       map[string]*managedTunnel
-	TunnelStopped func(string)
+	TunnelStopped func(TunnelStatus, bool)
 }
 
 const maxAdditionalTunnels = 8
@@ -46,6 +46,12 @@ type TunnelStatus struct {
 	Status             string `json:"status"`
 	Message            string `json:"message"`
 	StartedAt          int64  `json:"started_at"`
+	HealthStatus       string `json:"health_status"`
+	HealthMessage      string `json:"health_message"`
+	HealthIP           string `json:"health_ip"`
+	HealthLatencyMS    int64  `json:"health_latency_ms"`
+	HealthFailures     int    `json:"health_failures"`
+	LastHealthCheckAt  int64  `json:"last_health_check_at"`
 }
 
 type managedTunnel struct {
@@ -706,6 +712,15 @@ func (c *Controller) Running() bool {
 
 // ConnectTunnel 在 Linux 上启动一条附加隧道，不影响主 tun0 连接。
 func (c *Controller) ConnectTunnel(ctx context.Context, nodeID string, proxyPort int) (TunnelStatus, error) {
+	return c.connectTunnel(ctx, nodeID, proxyPort, "")
+}
+
+// ConnectTunnelOnDevice 在指定的附加 TUN 槽位建立隧道，供固定端口故障切换使用。
+func (c *Controller) ConnectTunnelOnDevice(ctx context.Context, nodeID string, proxyPort int, device string) (TunnelStatus, error) {
+	return c.connectTunnel(ctx, nodeID, proxyPort, device)
+}
+
+func (c *Controller) connectTunnel(ctx context.Context, nodeID string, proxyPort int, requestedDevice string) (TunnelStatus, error) {
 	if runtime.GOOS != "linux" {
 		return TunnelStatus{}, errors.New("附加 VPN 隧道目前仅支持 Linux")
 	}
@@ -728,18 +743,31 @@ func (c *Controller) ConnectTunnel(ctx context.Context, nodeID string, proxyPort
 		}
 	}
 	index := 0
-	for candidateIndex := 1; candidateIndex <= maxAdditionalTunnels; candidateIndex++ {
-		device := fmt.Sprintf("tun%d", candidateIndex)
-		if _, exists := c.tunnels[device]; !exists {
-			index = candidateIndex
-			break
+	if requestedDevice != "" {
+		parsed, err := strconv.Atoi(strings.TrimPrefix(requestedDevice, "tun"))
+		if err != nil || parsed < 1 || parsed > maxAdditionalTunnels || !strings.HasPrefix(requestedDevice, "tun") {
+			c.mu.Unlock()
+			return TunnelStatus{}, fmt.Errorf("附加隧道设备名无效: %s", requestedDevice)
+		}
+		if _, exists := c.tunnels[requestedDevice]; exists {
+			c.mu.Unlock()
+			return TunnelStatus{}, fmt.Errorf("附加隧道设备 %s 已被使用", requestedDevice)
+		}
+		index = parsed
+	} else {
+		for candidateIndex := 1; candidateIndex <= maxAdditionalTunnels; candidateIndex++ {
+			device := fmt.Sprintf("tun%d", candidateIndex)
+			if _, exists := c.tunnels[device]; !exists {
+				index = candidateIndex
+				break
+			}
 		}
 	}
 	device := fmt.Sprintf("tun%d", index)
 	tunnel := &managedTunnel{TunnelStatus: TunnelStatus{
 		Device: device, NodeID: nodeID, ProxyPort: proxyPort,
 		PublishedProxyPort: c.application.Config.TunnelProxyPublishedPortStart + index - 1, Table: 100 + index,
-		Status: "connecting", Message: "正在建立附加隧道", StartedAt: time.Now().Unix(),
+		Status: "connecting", Message: "正在建立附加隧道", HealthStatus: "checking", StartedAt: time.Now().Unix(),
 	}}
 	tunnel.endpointHost = store.FirstNonEmpty(candidate.RemoteHost, candidate.IP)
 	tunnel.endpointPriority = 100 + index
@@ -799,13 +827,16 @@ func (c *Controller) monitorTunnel(device string, process managedOpenVPNProcess,
 	c.mu.Unlock()
 	cleanupDevicePolicyRouting(device, tunnel.Table)
 	cleanupEndpointMainRoute(tunnel.endpointHost, tunnel.endpointPriority)
+	if candidate, found := c.application.NodeByID(tunnel.NodeID); found {
+		c.application.MarkBlacklisted(candidate, "附加隧道异常退出")
+	}
 	message := "OpenVPN 进程已退出"
 	if err != nil {
 		message = "OpenVPN 进程异常退出: " + err.Error()
 	}
 	c.application.LogEvent("warning", "VPN", fmt.Sprintf("附加隧道 %s 已断开: %s", device, message))
 	if c.TunnelStopped != nil {
-		c.TunnelStopped(device)
+		c.TunnelStopped(tunnel.TunnelStatus, true)
 	}
 }
 
@@ -833,9 +864,30 @@ func (c *Controller) DisconnectTunnel(device string) error {
 	cleanupEndpointMainRoute(tunnel.endpointHost, tunnel.endpointPriority)
 	c.application.LogEvent("info", "VPN", "附加隧道 "+device+" 已断开")
 	if c.TunnelStopped != nil {
-		c.TunnelStopped(device)
+		c.TunnelStopped(tunnel.TunnelStatus, false)
 	}
 	return nil
+}
+
+// UpdateTunnelHealth 更新附加隧道的代理出口健康状态。
+func (c *Controller) UpdateTunnelHealth(device string, healthy bool, ip, message string, latencyMS int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tunnel := c.tunnels[device]
+	if tunnel == nil {
+		return
+	}
+	tunnel.LastHealthCheckAt = time.Now().Unix()
+	tunnel.HealthIP = ip
+	tunnel.HealthMessage = message
+	tunnel.HealthLatencyMS = latencyMS
+	if healthy {
+		tunnel.HealthStatus = "healthy"
+		tunnel.HealthFailures = 0
+	} else {
+		tunnel.HealthStatus = "unhealthy"
+		tunnel.HealthFailures++
+	}
 }
 
 // Tunnels 返回附加隧道状态快照。

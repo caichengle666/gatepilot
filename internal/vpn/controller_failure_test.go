@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -78,8 +79,19 @@ func TestOpenVPNErrorEnvironmentFailuresDoNotBlacklist(t *testing.T) {
 }
 
 func TestOpenVPNRouteArguments(t *testing.T) {
-	if got := openVPNRouteArguments(true); len(got) == 0 {
+	got := openVPNRouteArguments(true)
+	if len(got) == 0 {
 		t.Fatal("routeNopull arguments should not be empty")
+	}
+	joined := strings.Join(got, " ")
+	expected := []string{"--pull-filter ignore redirect-gateway", "--route-nopull"}
+	if runtime.GOOS != "windows" {
+		expected = append([]string{"--pull-filter ignore dhcp-option"}, expected...)
+	}
+	for _, argument := range expected {
+		if !strings.Contains(joined, argument) {
+			t.Fatalf("routeNopull arguments missing %q: %#v", argument, got)
+		}
 	}
 	if got := openVPNRouteArguments(false); len(got) == 0 {
 		t.Fatal("normal route arguments should not be empty")
