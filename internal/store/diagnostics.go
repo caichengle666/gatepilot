@@ -185,6 +185,8 @@ func DiagnoseOpenVPNFailure(output string, cause error) (string, string) {
 		return "ERR_VPN_TLS", "OpenVPN TLS 握手失败，节点可能已失效或链路被阻断"
 	case strings.Contains(lower, "connection refused"):
 		return "ERR_VPN_REFUSED", "OpenVPN 服务端拒绝连接"
+	case strings.Contains(lower, "connection timed out") || strings.Contains(lower, "i/o timeout") || strings.Contains(lower, "server poll timeout"):
+		return "ERR_VPN_TIMEOUT", "连接 VPN 节点超时，节点可能已失效或当前网络无法到达该节点"
 	case strings.Contains(lower, "network is unreachable") || strings.Contains(lower, "no route to host"):
 		return "ERR_VPN_ROUTE", "服务器到 VPN 节点的网络路由不可达"
 	case strings.Contains(lower, "cannot open tun") || strings.Contains(lower, "tun/tap") && strings.Contains(lower, "failed") || strings.Contains(lower, "no tap-windows adapters") || strings.Contains(lower, "failed to open wintun") || strings.Contains(lower, "wintun adapters on this system") || strings.Contains(lower, "tap-windows6 adapters on this system") || strings.Contains(lower, "ovpn-dco") && strings.Contains(lower, "failed"):
