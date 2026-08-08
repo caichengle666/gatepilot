@@ -1597,6 +1597,7 @@ function renderTunnels() {
   const cards = tunnels.map(tunnel => {
     const node = nodes.find(item => item && item.id === tunnel.node_id) || {};
     const nodeLocation = node.location || translateCountry(node.country) || tunnel.node_id;
+    const nodeIP = node.ip || node.remote_host || "-";
     const proxyHost = window.location.hostname || "127.0.0.1";
     const healthStatus = tunnel.health_status || "checking";
     const healthText = healthStatus === "healthy" ? "代理正常" : healthStatus === "unhealthy" ? "代理异常" : "检测中";
@@ -1607,6 +1608,7 @@ function renderTunnels() {
         <span class="badge available"><span class="badge-pulse"></span>${esc(tunnel.device)}</span>
         <strong>${esc(nodeLocation)}</strong>
         <span class="mono" style="color:var(--text-secondary);">${esc(tunnel.node_id)}</span>
+        <span>节点 IP：<strong class="mono">${esc(nodeIP)}</strong></span>
         <span>独立代理：<strong class="mono">${esc(proxyHost)}:${tunnel.published_proxy_port || tunnel.proxy_port}</strong></span>
         <span class="badge ${healthClass}">${healthText}</span><span style="color:var(--text-secondary);">${esc(healthDetail)}</span>
         <span>路由表：<strong>${tunnel.route_table}</strong></span>
