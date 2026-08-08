@@ -90,6 +90,10 @@ func (a *Application) autoSwitch(attempt int) {
 		return
 	}
 	for _, candidate := range a.Store.Candidates() {
+		ui, _, _ = a.Store.Snapshot()
+		if !ui.ConnectionEnabled {
+			return
+		}
 		if candidate.ID == state.ActiveNodeID || candidate.ProbeStatus != "available" {
 			continue
 		}

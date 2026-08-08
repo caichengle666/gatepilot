@@ -76,6 +76,18 @@ func TestWebLoginAndAPIs(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("login failed: %s", response.Status)
 	}
+	response, err = client.Post(server.URL+"/testsecret/api/disconnect", "application/json", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("disconnect failed: %s", response.Status)
+	}
+	ui, _, _ := application.Snapshot()
+	if ui.ConnectionEnabled {
+		t.Fatal("manual disconnect must disable automatic reconnection")
+	}
 
 	response, err = client.Get(server.URL + "/testsecret/api/nodes")
 	if err != nil {

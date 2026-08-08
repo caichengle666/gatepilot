@@ -474,6 +474,13 @@ func (c *Controller) ConnectContext(ctx context.Context, nodeID string) (string,
 		_ = c.application.SetState("error", err.Error(), "")
 		return "", err
 	}
+	ui, _, _ := c.application.Snapshot()
+	if !ui.ConnectionEnabled {
+		stopCommandAndWait(run.process, run.done)
+		cleanupPolicyRouting()
+		_ = c.application.SetState("disconnected", "用户已断开连接", "")
+		return "", context.Canceled
+	}
 	c.mu.Lock()
 	c.command, c.nodeID = run.process, candidate.ID
 	c.mu.Unlock()

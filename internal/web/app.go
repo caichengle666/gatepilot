@@ -423,6 +423,8 @@ func (a *Application) handlePOST(writer http.ResponseWriter, request *http.Reque
 		a.Operations.unlockIfOwned()
 		writeOperationResult(writer, message, err)
 	case "/api/disconnect":
+		a.cancelMaintenance()
+		a.Store.SetConnectionEnabled(false)
 		a.VPN.Stop("用户已断开连接")
 		writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true})
 	case "/api/tunnels/connect":
