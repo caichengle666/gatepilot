@@ -78,7 +78,7 @@ func main() {
 		log.Printf("OpenVPN 核心不可用: %s", message)
 	}
 	cleanup := func() {
-		vpnCtrl.Stop("服务正在退出")
+		vpnCtrl.StopAll("服务正在退出")
 		if managedOpenVPNService {
 			if err := vpn.RemoveWindowsOpenVPNService(); err != nil {
 				log.Printf("删除 GatePilotOpenVPN SYSTEM 服务失败: %v", err)

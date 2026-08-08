@@ -208,7 +208,9 @@ configure_docker_firewall() {
         : > "$migration_marker"
     fi
     [ "$web_bind" = "127.0.0.1" ] || public_ports+=("$web_port")
-    [ "$proxy_bind" = "127.0.0.1" ] || public_ports+=("$proxy_port")
+    if [ "$proxy_bind" != "127.0.0.1" ]; then
+        public_ports+=("$proxy_port" "7929:7936")
+    fi
     remove_gatepilot_firewall
     if [ "${#public_ports[@]}" -eq 0 ]; then
         persist_firewall_rules

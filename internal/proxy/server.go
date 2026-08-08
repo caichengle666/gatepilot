@@ -28,6 +28,7 @@ type Server struct {
 	username   string
 	password   string
 	requireTun bool
+	device     string
 	traffic    trafficCounter
 	mu         sync.Mutex
 	listener   net.Listener
@@ -45,7 +46,16 @@ func NewServer(config store.AppConfig, ui store.UIConfig) *Server {
 		username:   username,
 		password:   password,
 		requireTun: store.EnvBool("LOCAL_PROXY_BIND_TUN", true),
+		device:     "tun0",
 	}
+}
+
+// NewTunnelServer 创建绑定到指定 Linux TUN 网卡和端口的代理服务器。
+func NewTunnelServer(config store.AppConfig, ui store.UIConfig, port int, device string) *Server {
+	server := NewServer(config, ui)
+	server.port = port
+	server.device = device
+	return server
 }
 
 // UpdateAuth 更新代理认证凭据。
@@ -89,7 +99,7 @@ func (s *Server) dialTarget(address string) (net.Conn, error) {
 	if Route(host) == RouteDirect {
 		conn, err = DialDirect(address)
 	} else {
-		conn, err = DialVPN(address, s.requireTun)
+		conn, err = DialVPNOnDevice(address, s.requireTun, s.device)
 	}
 	if s.Failover != nil {
 		if err != nil {
@@ -103,17 +113,43 @@ func (s *Server) dialTarget(address string) (net.Conn, error) {
 
 // Serve 启动代理监听。
 func (s *Server) Serve() error {
+	listener, err := s.listen()
+	if err != nil {
+		return err
+	}
+	return s.serve(listener)
+}
+
+// Start 启动代理并在监听成功后立即返回。
+func (s *Server) Start() error {
+	listener, err := s.listen()
+	if err != nil {
+		return err
+	}
+	go func() {
+		if serveErr := s.serve(listener); serveErr != nil {
+			log.Printf("Tunnel proxy stopped: %v", serveErr)
+		}
+	}()
+	return nil
+}
+
+func (s *Server) listen() (net.Listener, error) {
 	s.mu.Lock()
 	host, port := s.host, s.port
 	s.mu.Unlock()
 	listener, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	s.mu.Lock()
 	s.listener = listener
 	s.mu.Unlock()
 	log.Printf("HTTP/SOCKS5 proxy listening on %s", listener.Addr())
+	return listener, nil
+}
+
+func (s *Server) serve(listener net.Listener) error {
 	for {
 		client, acceptErr := listener.Accept()
 		if acceptErr != nil {
@@ -132,6 +168,22 @@ func (s *Server) Serve() error {
 			_ = client.Close()
 		}
 	}
+}
+
+// Close 停止代理监听。
+func (s *Server) Close() error {
+	s.mu.Lock()
+	listener := s.listener
+	s.listener = nil
+	if s.restart != nil {
+		s.restart.Stop()
+		s.restart = nil
+	}
+	s.mu.Unlock()
+	if listener == nil {
+		return nil
+	}
+	return listener.Close()
 }
 
 // ScheduleRestart 延迟重启代理监听。

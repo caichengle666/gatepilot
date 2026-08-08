@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +39,8 @@ type Application struct {
 	speedTests        sync.Mutex
 	maintenanceMu     sync.Mutex
 	maintenanceCancel context.CancelFunc
+	tunnelProxyMu     sync.Mutex
+	tunnelProxies     map[string]*proxy.Server
 }
 
 type loginFailure struct {
@@ -101,10 +104,12 @@ func (a *Application) cancelMaintenance() {
 
 // NewApplication 创建 Web 管理服务。
 func NewApplication(application *store.Store, vpnCtrl *vpn.Controller) *Application {
-	return &Application{
+	webApp := &Application{
 		Store: application, VPN: vpnCtrl, startedAt: time.Now(),
-		sessions: map[string]time.Time{}, logins: map[string]loginFailure{},
+		sessions: map[string]time.Time{}, logins: map[string]loginFailure{}, tunnelProxies: map[string]*proxy.Server{},
 	}
+	vpnCtrl.TunnelStopped = webApp.stopTunnelProxy
+	return webApp
 }
 
 // Serve 启动 HTTP 监听，端口变更后自动重启。
@@ -274,6 +279,10 @@ func (a *Application) handleGET(writer http.ResponseWriter, request *http.Reques
 			return
 		}
 		writeJSONResponse(writer, http.StatusOK, a.Proxy.Traffic())
+	case path == "/api/tunnels":
+		writeJSONResponse(writer, http.StatusOK, map[string]any{
+			"supported": runtime.GOOS == "linux", "max_tunnels": 8, "tunnels": a.VPN.Tunnels(),
+		})
 	case path == "/api/split_routing":
 		a.getSplitRouting(writer, request)
 	case path == "/api/logs":
@@ -415,6 +424,10 @@ func (a *Application) handlePOST(writer http.ResponseWriter, request *http.Reque
 	case "/api/disconnect":
 		a.VPN.Stop("用户已断开连接")
 		writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true})
+	case "/api/tunnels/connect":
+		a.connectTunnel(writer, request)
+	case "/api/tunnels/disconnect":
+		a.disconnectTunnel(writer, request)
 	case "/api/refresh_nodes":
 		if !a.Operations.TryLock() {
 			writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true, "message": "节点维护任务正在运行，请稍后再试", "running": true})
@@ -491,6 +504,97 @@ func (a *Application) handlePOST(writer http.ResponseWriter, request *http.Reque
 		a.speedTest(writer, request)
 	default:
 		http.NotFound(writer, request)
+	}
+}
+
+func (a *Application) connectTunnel(writer http.ResponseWriter, request *http.Request) {
+	if runtime.GOOS != "linux" {
+		writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": "附加 VPN 隧道目前仅支持 Linux"})
+		return
+	}
+	var payload struct {
+		ID        string `json:"id"`
+		ProxyPort int    `json:"proxy_port"`
+	}
+	if err := decodeJSON(request, &payload); err != nil || payload.ID == "" {
+		writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": "节点 ID 不能为空"})
+		return
+	}
+	ui, _, _ := a.Store.Snapshot()
+	if payload.ProxyPort == 0 {
+		payload.ProxyPort = a.nextTunnelProxyPort(ui)
+	}
+	portEnd := a.Store.Config.TunnelProxyPortStart + 7
+	if payload.ProxyPort < a.Store.Config.TunnelProxyPortStart || payload.ProxyPort > portEnd || payload.ProxyPort == ui.Port || payload.ProxyPort == ui.ProxyPort {
+		writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": "附加代理端口无效或与现有服务冲突"})
+		return
+	}
+	if !a.Operations.TryLockFor(8 * time.Second) {
+		writeJSONResponse(writer, http.StatusConflict, map[string]any{"ok": false, "error": "当前已有连接或节点维护任务正在运行"})
+		return
+	}
+	status, err := a.VPN.ConnectTunnel(request.Context(), payload.ID, payload.ProxyPort)
+	a.Operations.unlockIfOwned()
+	if err != nil {
+		writeOperationResult(writer, "", err)
+		return
+	}
+	server := proxy.NewTunnelServer(a.Store.Config, ui, status.ProxyPort, status.Device)
+	a.tunnelProxyMu.Lock()
+	a.tunnelProxies[status.Device] = server
+	a.tunnelProxyMu.Unlock()
+	if err := server.Start(); err != nil {
+		a.stopTunnelProxy(status.Device)
+		_ = a.VPN.DisconnectTunnel(status.Device)
+		writeOperationResult(writer, "", fmt.Errorf("启动附加代理端口 %d 失败: %w", status.ProxyPort, err))
+		return
+	}
+	writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true, "tunnel": status})
+}
+
+func (a *Application) disconnectTunnel(writer http.ResponseWriter, request *http.Request) {
+	var payload struct {
+		Device string `json:"device"`
+	}
+	if err := decodeJSON(request, &payload); err != nil || !regexp.MustCompile(`^tun[1-8]$`).MatchString(payload.Device) {
+		writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": "附加隧道设备名无效"})
+		return
+	}
+	if err := a.VPN.DisconnectTunnel(payload.Device); err != nil {
+		writeOperationResult(writer, "", err)
+		return
+	}
+	writeJSONResponse(writer, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (a *Application) nextTunnelProxyPort(ui store.UIConfig) int {
+	used := map[int]bool{ui.Port: true, ui.ProxyPort: true}
+	for _, tunnel := range a.VPN.Tunnels() {
+		used[tunnel.ProxyPort] = true
+	}
+	for port := a.Store.Config.TunnelProxyPortStart; port < a.Store.Config.TunnelProxyPortStart+8; port++ {
+		if !used[port] {
+			return port
+		}
+	}
+	return 0
+}
+
+func (a *Application) stopTunnelProxy(device string) {
+	a.tunnelProxyMu.Lock()
+	server := a.tunnelProxies[device]
+	delete(a.tunnelProxies, device)
+	a.tunnelProxyMu.Unlock()
+	if server != nil {
+		_ = server.Close()
+	}
+}
+
+func (a *Application) updateTunnelProxyAuth(username, password string) {
+	a.tunnelProxyMu.Lock()
+	defer a.tunnelProxyMu.Unlock()
+	for _, server := range a.tunnelProxies {
+		server.UpdateAuth(username, password)
 	}
 }
 
@@ -809,6 +913,7 @@ func (a *Application) updateSettings(writer http.ResponseWriter, request *http.R
 	if proxyAuthChanged && a.Proxy != nil {
 		username, password, _ := store.ProxyCredentials(uiSnapshot(a.Store))
 		a.Proxy.UpdateAuth(username, password)
+		a.updateTunnelProxyAuth(username, password)
 	}
 	message := "配置更新成功，已即时生效！"
 	restartNeeded := webPortChanged || proxyPortChanged

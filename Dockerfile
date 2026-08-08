@@ -25,10 +25,11 @@ ENV VPNGATE_DATA_DIR=/var/lib/gatepilot \
     UI_PORT=8787 \
     LOCAL_PROXY_HOST=0.0.0.0 \
     LOCAL_PROXY_PORT=7928 \
+    LOCAL_PROXY_TUNNEL_PORT_START=7929 \
     LOCAL_PROXY_BIND_TUN=true
 
 VOLUME ["/var/lib/gatepilot"]
-EXPOSE 8787 7928
+EXPOSE 8787 7928 7929-7936
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=6 \
     CMD curl -fsS "http://127.0.0.1:${UI_PORT:-8787}/healthz" || exit 1

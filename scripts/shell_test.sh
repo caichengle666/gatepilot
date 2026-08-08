@@ -57,6 +57,7 @@ assert_logged "-D FORWARD -p tcp --dport 8787 -j ACCEPT"
 assert_logged "-D FORWARD -p tcp --dport 7928 -j ACCEPT"
 assert_logged "-A GATEPILOT -p tcp --dport 8787 -j ACCEPT"
 assert_logged "-A GATEPILOT -p tcp --dport 7928 -j ACCEPT"
+assert_logged "-A GATEPILOT -p tcp --dport 7929:7936 -j ACCEPT"
 [ -f "$TEST_DIR/data/.firewall_chain_migrated" ]
 
 : > "$IPTABLES_LOG"
@@ -72,6 +73,10 @@ assert_logged "-X GATEPILOT"
 assert_logged "-A GATEPILOT -p tcp --dport 9999 -j ACCEPT"
 if grep -F -- "-A GATEPILOT -p tcp --dport 8787 -j ACCEPT" "$IPTABLES_LOG" >/dev/null; then
     echo "端口更新后仍添加旧 Web 端口"
+    exit 1
+fi
+if grep -F -- "-A GATEPILOT -p tcp --dport 7929:7936 -j ACCEPT" "$IPTABLES_LOG" >/dev/null; then
+    echo "仅本机发布代理时不应放行附加隧道端口"
     exit 1
 fi
 

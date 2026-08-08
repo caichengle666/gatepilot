@@ -12,6 +12,11 @@ import (
 
 // DialVPN 通过 VPN 隧道拨号（Linux 平台绑定到 tun0）。
 func DialVPN(address string, requireTun bool) (net.Conn, error) {
+	return DialVPNOnDevice(address, requireTun, "tun0")
+}
+
+// DialVPNOnDevice 通过指定的 Linux VPN 网卡拨号。
+func DialVPNOnDevice(address string, requireTun bool, device string) (net.Conn, error) {
 	dialer := net.Dialer{Timeout: 20 * time.Second, KeepAlive: 30 * time.Second}
 	if requireTun {
 		host, port, err := net.SplitHostPort(address)
@@ -19,24 +24,24 @@ func DialVPN(address string, requireTun bool) (net.Conn, error) {
 			return nil, err
 		}
 		if net.ParseIP(host) == nil {
-			host, err = resolveVPNHost(host)
+			host, err = resolveVPNHost(host, device)
 			if err != nil {
 				return nil, err
 			}
 			address = net.JoinHostPort(host, port)
 		}
-		dialer.Control = bindToDevice("tun0")
+		dialer.Control = bindToDevice(device)
 	}
 	return dialer.DialContext(context.Background(), "tcp", address)
 }
 
-func resolveVPNHost(host string) (string, error) {
+func resolveVPNHost(host, device string) (string, error) {
 	var lastError error
 	for _, dnsServer := range []string{"1.1.1.1:53", "8.8.8.8:53"} {
 		resolver := &net.Resolver{
 			PreferGo: true,
 			Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				dialer := net.Dialer{Timeout: 5 * time.Second, Control: bindToDevice("tun0")}
+				dialer := net.Dialer{Timeout: 5 * time.Second, Control: bindToDevice(device)}
 				return dialer.DialContext(ctx, "udp", dnsServer)
 			},
 		}

@@ -152,3 +152,21 @@ func TestProxyAuthUpdateTakesEffect(t *testing.T) {
 		t.Fatal("auth should be disabled after clearing credentials")
 	}
 }
+
+func TestTunnelServerUsesDedicatedDeviceAndPort(t *testing.T) {
+	config := store.AppConfig{ProxyHost: "127.0.0.1", ProxyPort: 7928, ProxyMaxConnections: 8}
+	server := NewTunnelServer(config, store.UIConfig{}, 0, "tun3")
+	if server.device != "tun3" || server.port != 0 {
+		t.Fatalf("unexpected tunnel server configuration: device=%s port=%d", server.device, server.port)
+	}
+	server.requireTun = false
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if server.listener == nil {
+		t.Fatal("tunnel proxy did not start listening")
+	}
+	if err := server.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

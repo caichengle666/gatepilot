@@ -11,3 +11,8 @@ import (
 func DialVPN(address string, _ bool) (net.Conn, error) {
 	return net.DialTimeout("tcp", address, 20*time.Second)
 }
+
+// DialVPNOnDevice 在不支持多隧道的平台保持默认拨号行为。
+func DialVPNOnDevice(address string, requireTun bool, _ string) (net.Conn, error) {
+	return DialVPN(address, requireTun)
+}

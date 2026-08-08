@@ -9,6 +9,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -90,6 +91,24 @@ func TestWebLoginAndAPIs(t *testing.T) {
 	_ = response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("nodes API failed: %s", response.Status)
+	}
+
+	response, err = client.Get(server.URL + "/testsecret/api/tunnels")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tunnelsPayload struct {
+		Supported  bool               `json:"supported"`
+		MaxTunnels int                `json:"max_tunnels"`
+		Tunnels    []vpn.TunnelStatus `json:"tunnels"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&tunnelsPayload); err != nil {
+		_ = response.Body.Close()
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || tunnelsPayload.Supported != (runtime.GOOS == "linux") || tunnelsPayload.MaxTunnels != 8 || len(tunnelsPayload.Tunnels) != 0 {
+		t.Fatalf("unexpected tunnels response: status=%s payload=%+v", response.Status, tunnelsPayload)
 	}
 
 	response, err = client.Get(server.URL + "/testsecret/")

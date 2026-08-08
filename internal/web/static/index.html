@@ -962,6 +962,8 @@
       <!-- Rendered dynamically by render() -->
     </section>
 
+    <section id="multi_tunnel_card" style="display: none; margin-bottom: 24px;"></section>
+
 
 
   <section class="toolbar">
@@ -1396,7 +1398,7 @@
   </div>
 </main>
 <script>
-let nodes=[], state={}, testingNodeIds = new Set(), speedTesting = false;
+let nodes=[], state={}, tunnels=[], tunnelSupported=false, testingNodeIds = new Set(), connectingTunnelNodeIds = new Set(), speedTesting = false;
 let currentPage = 1;
 const pageSize = 99999;
 let currentPageNodes = [];
@@ -1584,9 +1586,42 @@ function stableSortNodes() {
   });
 }
 
+function renderTunnels() {
+  const container = $("multi_tunnel_card");
+  if (!container) return;
+  if (!tunnelSupported) {
+    container.style.display = "none";
+    return;
+  }
+  container.style.display = "block";
+  const cards = tunnels.map(tunnel => {
+    const node = nodes.find(item => item && item.id === tunnel.node_id) || {};
+    const nodeLocation = node.location || translateCountry(node.country) || tunnel.node_id;
+    const proxyHost = window.location.hostname || "127.0.0.1";
+    return `<div style="display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 14px; border-top:1px solid var(--border-color);">
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <span class="badge available"><span class="badge-pulse"></span>${esc(tunnel.device)}</span>
+        <strong>${esc(nodeLocation)}</strong>
+        <span class="mono" style="color:var(--text-secondary);">${esc(tunnel.node_id)}</span>
+        <span>独立代理：<strong class="mono">${esc(proxyHost)}:${tunnel.proxy_port}</strong></span>
+        <span>路由表：<strong>${tunnel.route_table}</strong></span>
+      </div>
+      <button class="btn-danger" style="height:32px; padding:0 12px; border-radius:7px;" onclick="disconnectTunnel('${esc(tunnel.device)}')">断开</button>
+    </div>`;
+  }).join("");
+  container.innerHTML = `<div class="active-card" style="display:block; padding:0; overflow:hidden;">
+    <div style="padding:14px; display:flex; justify-content:space-between; align-items:center;">
+      <div><strong>Linux 多隧道出口</strong><div style="font-size:12px; color:var(--text-secondary); margin-top:4px;">每条 TUN 使用独立代理端口，最多同时运行 8 条附加隧道。</div></div>
+      <span class="badge ${tunnels.length ? 'available' : 'not_checked'}">${tunnels.length} 条运行中</span>
+    </div>
+    ${cards || '<div style="padding:12px 14px; border-top:1px solid var(--border-color); color:var(--text-secondary); font-size:13px;">在节点列表点击“追加隧道”即可创建 tun1、tun2 等独立出口。</div>'}
+  </div>`;
+}
+
 function render(){
   const activeNodeId = state.active_openvpn_node_id;
   const activeNode = nodes.find(n => n && (n.active || n.id === activeNodeId));
+	  renderTunnels();
   if (!activeNode || (dashboardSpeedTest.nodeId && dashboardSpeedTest.nodeId !== (activeNodeId || ""))) {
     if (!dashboardSpeedTest.running) {
       dashboardSpeedTest = { running: false, text: "", color: "var(--text-secondary)", nodeId: "" };
@@ -1792,6 +1827,10 @@ function render(){
       const connectBtn = isCurrentlyActive 
         ? `<button class="${connectClass}" disabled style="background: var(--success-gradient); color: white; cursor: default; opacity: 1;">已连接 ${esc(protocol)}</button>`
         : `<button class="${connectClass}" ${(isTesting || connectionBusy) ? 'disabled style="opacity:0.3; cursor:not-allowed;"' : ''} onclick="connectNode('${esc(n.id)}', '${requestedProtocol}')">${connectLabel}</button>`;
+      const tunnelBusy = connectingTunnelNodeIds.has(n.id);
+      const tunnelBtn = tunnelSupported
+        ? `<button class="test-btn" ${(tunnelBusy || tunnels.length >= 8) ? 'disabled' : ''} onclick="connectTunnel('${esc(n.id)}')">${tunnelBusy ? '创建中...' : '追加隧道'}</button>`
+        : '';
       
       const favoriteIds = Array.isArray(state.favorite_node_ids) ? state.favorite_node_ids : [];
       const isFav = favoriteIds.includes(n.id);
@@ -1811,6 +1850,7 @@ function render(){
         <td>
           <div class="table-actions">
             ${favBtn}
+            ${tunnelBtn}
             ${connectBtn}
           </div>
         </td>
@@ -2015,15 +2055,68 @@ async function disconnectNode(){
   }
 }
 
+async function connectTunnel(id) {
+  connectingTunnelNodeIds.add(id);
+  render();
+  try {
+    const response = await fetch("./api/tunnels/connect", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({id})
+    });
+    const result = await response.json();
+    if (!result.ok) {
+      alert("创建附加隧道失败: " + (result.error || "未知错误"));
+    } else {
+      alert(`${result.tunnel.device} 已启动，独立代理端口：${result.tunnel.proxy_port}`);
+    }
+  } catch (e) {
+    alert("创建附加隧道请求失败");
+  } finally {
+    connectingTunnelNodeIds.delete(id);
+    await load();
+  }
+}
+
+async function disconnectTunnel(device) {
+  if (!confirm(`确定断开 ${device} 吗？`)) return;
+  try {
+    const response = await fetch("./api/tunnels/disconnect", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({device})
+    });
+    const result = await response.json();
+    if (!result.ok) alert("断开附加隧道失败: " + (result.error || "未知错误"));
+  } catch (e) {
+    alert("断开附加隧道请求失败");
+  }
+  await loadTunnels();
+}
+
+async function loadTunnels() {
+  try {
+    const response = await fetch("./api/tunnels");
+    const result = await response.json();
+    tunnelSupported = !!result.supported;
+    tunnels = Array.isArray(result.tunnels) ? result.tunnels : [];
+    renderTunnels();
+  } catch (e) {
+    console.error("加载附加隧道失败", e);
+  }
+}
+
 
 
 
 
 async function load(){
-  const r=await fetch("./api/nodes"); 
-  const d=await r.json(); 
-  nodes=Array.isArray(d.nodes) ? d.nodes : []; 
-  state=d.state||{}; 
+  const [r, tunnelResponse]=await Promise.all([fetch("./api/nodes"), fetch("./api/tunnels")]);
+  const [d, tunnelData]=await Promise.all([r.json(), tunnelResponse.json()]);
+  nodes=Array.isArray(d.nodes) ? d.nodes : [];
+  state=d.state||{};
+	  tunnelSupported=!!tunnelData.supported;
+	  tunnels=Array.isArray(tunnelData.tunnels) ? tunnelData.tunnels : [];
   
   stableSortNodes();
   updateCountryFilter();
@@ -2849,6 +2942,7 @@ async function logoutAdmin() {
 
 // 页面加载时自动初始化数据
 load();
+setInterval(loadTunnels, 3000);
 
 function formatBytes(value) {
   const bytes = Number(value || 0);

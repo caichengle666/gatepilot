@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,13 +23,36 @@ import (
 
 // Controller 管理 OpenVPN 进程的生命周期。
 type Controller struct {
-	mu          sync.Mutex
-	application *store.Store
-	command     managedOpenVPNProcess
-	nodeID      string
-	testIndex   int
-	versionOnce sync.Once
-	version     float64
+	mu            sync.Mutex
+	application   *store.Store
+	command       managedOpenVPNProcess
+	nodeID        string
+	testIndex     int
+	versionOnce   sync.Once
+	version       float64
+	tunnels       map[string]*managedTunnel
+	TunnelStopped func(string)
+}
+
+const maxAdditionalTunnels = 8
+
+// TunnelStatus 描述一条 Linux 附加 VPN 隧道及其独立代理入口。
+type TunnelStatus struct {
+	Device    string `json:"device"`
+	NodeID    string `json:"node_id"`
+	ProxyPort int    `json:"proxy_port"`
+	Table     int    `json:"route_table"`
+	Status    string `json:"status"`
+	Message   string `json:"message"`
+	StartedAt int64  `json:"started_at"`
+}
+
+type managedTunnel struct {
+	TunnelStatus
+	process          managedOpenVPNProcess
+	done             <-chan error
+	endpointHost     string
+	endpointPriority int
 }
 
 type openVPNRun struct {
@@ -54,7 +78,7 @@ func (failure *openVPNFailure) Unwrap() error {
 // NewController 创建 VPN 控制器。
 func NewController(application *store.Store) *Controller {
 	cleanupStaleVPNState(application.Config.OpenVPNCommand)
-	return &Controller{application: application, testIndex: 10}
+	return &Controller{application: application, testIndex: 10, tunnels: map[string]*managedTunnel{}}
 }
 
 func sanitizeOpenVPNConfig(raw string) string {
@@ -98,6 +122,7 @@ func (c *Controller) commandFor(candidate store.Node, configPath, device, window
 	)
 	arguments = append(arguments, openVPNDeviceArguments(device, c.openVPNVersion(), windowsDriver)...)
 	arguments = append(arguments, openVPNRouteArguments(routeNopull)...)
+	arguments = append(arguments, openVPNControlArguments(device)...)
 	if c.openVPNVersion() >= 2.5 {
 		arguments = append(arguments,
 			"--data-ciphers", "AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-256-CBC:AES-128-CBC",
@@ -302,7 +327,7 @@ func (c *Controller) runUntilReady(ctx context.Context, candidate store.Node, de
 func (c *Controller) runUntilReadyWithDriver(ctx context.Context, candidate store.Node, device, windowsDriver string, timeout time.Duration, routeNopull bool) (*openVPNRun, error) {
 	ready := false
 	defer func() {
-		if !ready {
+		if !ready && !routeNopull {
 			cleanupPolicyRouting()
 		}
 	}()
@@ -351,7 +376,9 @@ func (c *Controller) runUntilReadyWithDriver(ctx context.Context, candidate stor
 			if len(tail) > 16 {
 				tail = tail[len(tail)-16:]
 			}
-			c.updateHandshakeStatus(line)
+			if device == "tun0" || strings.HasPrefix(device, "tun_test") {
+				c.updateHandshakeStatus(line)
+			}
 			lower := strings.ToLower(line)
 			if strings.Contains(lower, "initialization sequence completed") {
 				ready = true
@@ -539,7 +566,6 @@ func (c *Controller) TestNodeContext(ctx context.Context, nodeID string) (store.
 	case <-run.done:
 	case <-time.After(3 * time.Second):
 	}
-	cleanupPolicyRouting()
 	if latency <= 0 {
 		latency = time.Since(started).Milliseconds()
 	}
@@ -668,6 +694,159 @@ func (c *Controller) Running() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.command != nil
+}
+
+// ConnectTunnel 在 Linux 上启动一条附加隧道，不影响主 tun0 连接。
+func (c *Controller) ConnectTunnel(ctx context.Context, nodeID string, proxyPort int) (TunnelStatus, error) {
+	if runtime.GOOS != "linux" {
+		return TunnelStatus{}, errors.New("附加 VPN 隧道目前仅支持 Linux")
+	}
+	candidate, found := c.application.NodeByID(nodeID)
+	if !found {
+		return TunnelStatus{}, fmt.Errorf("找不到节点 %s", nodeID)
+	}
+	if err := c.ValidateCandidate(candidate); err != nil {
+		return TunnelStatus{}, err
+	}
+	c.mu.Lock()
+	if len(c.tunnels) >= maxAdditionalTunnels {
+		c.mu.Unlock()
+		return TunnelStatus{}, fmt.Errorf("附加隧道最多同时运行 %d 条", maxAdditionalTunnels)
+	}
+	for _, tunnel := range c.tunnels {
+		if tunnel.ProxyPort == proxyPort {
+			c.mu.Unlock()
+			return TunnelStatus{}, fmt.Errorf("代理端口 %d 已被附加隧道使用", proxyPort)
+		}
+	}
+	index := 0
+	for candidateIndex := 1; candidateIndex <= maxAdditionalTunnels; candidateIndex++ {
+		device := fmt.Sprintf("tun%d", candidateIndex)
+		if _, exists := c.tunnels[device]; !exists {
+			index = candidateIndex
+			break
+		}
+	}
+	device := fmt.Sprintf("tun%d", index)
+	tunnel := &managedTunnel{TunnelStatus: TunnelStatus{
+		Device: device, NodeID: nodeID, ProxyPort: proxyPort, Table: 100 + index,
+		Status: "connecting", Message: "正在建立附加隧道", StartedAt: time.Now().Unix(),
+	}}
+	tunnel.endpointHost = store.FirstNonEmpty(candidate.RemoteHost, candidate.IP)
+	tunnel.endpointPriority = 100 + index
+	c.tunnels[device] = tunnel
+	c.mu.Unlock()
+
+	endpointRouteReady := setupEndpointMainRoute(tunnel.endpointHost, tunnel.endpointPriority)
+	run, err := c.runUntilReady(ctx, candidate, device, c.application.Config.OpenVPNTimeout, true)
+	if err != nil {
+		if endpointRouteReady {
+			cleanupEndpointMainRoute(tunnel.endpointHost, tunnel.endpointPriority)
+		}
+		c.removeTunnel(device, nil)
+		return TunnelStatus{}, err
+	}
+	setupDevicePolicyRouting(device, tunnel.Table)
+	if err := waitForDeviceReady(device, 15*time.Second); err != nil {
+		stopCommandAndWait(run.process, run.done)
+		cleanupDevicePolicyRouting(device, tunnel.Table)
+		if endpointRouteReady {
+			cleanupEndpointMainRoute(tunnel.endpointHost, tunnel.endpointPriority)
+		}
+		c.removeTunnel(device, nil)
+		return TunnelStatus{}, err
+	}
+	c.mu.Lock()
+	current := c.tunnels[device]
+	if current != tunnel {
+		c.mu.Unlock()
+		stopCommandAndWait(run.process, run.done)
+		cleanupDevicePolicyRouting(device, tunnel.Table)
+		if endpointRouteReady {
+			cleanupEndpointMainRoute(tunnel.endpointHost, tunnel.endpointPriority)
+		}
+		return TunnelStatus{}, errors.New("附加隧道启动已取消")
+	}
+	tunnel.process = run.process
+	tunnel.done = run.done
+	tunnel.Status = "connected"
+	tunnel.Message = "OpenVPN 已连接"
+	status := tunnel.TunnelStatus
+	c.mu.Unlock()
+	c.application.LogEvent("info", "VPN", fmt.Sprintf("附加隧道 %s 已连接节点 %s，代理端口 %d", device, nodeID, proxyPort))
+	go c.monitorTunnel(device, run.process, run.done)
+	return status, nil
+}
+
+func (c *Controller) monitorTunnel(device string, process managedOpenVPNProcess, done <-chan error) {
+	err := <-done
+	c.mu.Lock()
+	tunnel := c.tunnels[device]
+	if tunnel == nil || tunnel.process != process {
+		c.mu.Unlock()
+		return
+	}
+	delete(c.tunnels, device)
+	c.mu.Unlock()
+	cleanupDevicePolicyRouting(device, tunnel.Table)
+	cleanupEndpointMainRoute(tunnel.endpointHost, tunnel.endpointPriority)
+	message := "OpenVPN 进程已退出"
+	if err != nil {
+		message = "OpenVPN 进程异常退出: " + err.Error()
+	}
+	c.application.LogEvent("warning", "VPN", fmt.Sprintf("附加隧道 %s 已断开: %s", device, message))
+	if c.TunnelStopped != nil {
+		c.TunnelStopped(device)
+	}
+}
+
+func (c *Controller) removeTunnel(device string, process managedOpenVPNProcess) *managedTunnel {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tunnel := c.tunnels[device]
+	if tunnel != nil && (process == nil || tunnel.process == process) {
+		delete(c.tunnels, device)
+		return tunnel
+	}
+	return nil
+}
+
+// DisconnectTunnel 停止指定附加隧道。
+func (c *Controller) DisconnectTunnel(device string) error {
+	tunnel := c.removeTunnel(device, nil)
+	if tunnel == nil {
+		return fmt.Errorf("找不到附加隧道 %s", device)
+	}
+	if tunnel.process != nil {
+		stopCommand(tunnel.process)
+	}
+	cleanupDevicePolicyRouting(device, tunnel.Table)
+	cleanupEndpointMainRoute(tunnel.endpointHost, tunnel.endpointPriority)
+	c.application.LogEvent("info", "VPN", "附加隧道 "+device+" 已断开")
+	if c.TunnelStopped != nil {
+		c.TunnelStopped(device)
+	}
+	return nil
+}
+
+// Tunnels 返回附加隧道状态快照。
+func (c *Controller) Tunnels() []TunnelStatus {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	result := make([]TunnelStatus, 0, len(c.tunnels))
+	for _, tunnel := range c.tunnels {
+		result = append(result, tunnel.TunnelStatus)
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left].Device < result[right].Device })
+	return result
+}
+
+// StopAll 停止主隧道和全部附加隧道。
+func (c *Controller) StopAll(message string) {
+	c.Stop(message)
+	for _, tunnel := range c.Tunnels() {
+		_ = c.DisconnectTunnel(tunnel.Device)
+	}
 }
 
 func minDuration(left, right time.Duration) time.Duration {

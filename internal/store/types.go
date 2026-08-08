@@ -40,25 +40,26 @@ type Node struct {
 
 // AppConfig 是应用启动配置，来自环境变量。
 type AppConfig struct {
-	APIURL              string
-	DataDir             string
-	OpenVPNCommand      string
-	OpenVPNUser         string
-	OpenVPNPassword     string
-	ProxyHost           string
-	ProxyPort           int
-	ProxyMaxConnections int
-	UIHost              string
-	UIPort              int
-	FetchInterval       time.Duration
-	ReconnectInterval   time.Duration
-	OpenVPNTimeout      time.Duration
-	TargetValidNodes    int
-	MaxScanRows         int
-	InvalidBackoff      time.Duration
-	ManualTestNodeLimit int
-	InitialTestLimit    int
-	DisableBackground   bool
+	APIURL               string
+	DataDir              string
+	OpenVPNCommand       string
+	OpenVPNUser          string
+	OpenVPNPassword      string
+	ProxyHost            string
+	ProxyPort            int
+	TunnelProxyPortStart int
+	ProxyMaxConnections  int
+	UIHost               string
+	UIPort               int
+	FetchInterval        time.Duration
+	ReconnectInterval    time.Duration
+	OpenVPNTimeout       time.Duration
+	TargetValidNodes     int
+	MaxScanRows          int
+	InvalidBackoff       time.Duration
+	ManualTestNodeLimit  int
+	InitialTestLimit     int
+	DisableBackground    bool
 }
 
 // UIConfig 是 Web 管理界面的运行时配置，持久化到磁盘。

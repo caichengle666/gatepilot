@@ -31,6 +31,7 @@ OpenVPN 进程 → Linux tun0 / Windows Wintun 或 TAP
 - 启动并监控外部 OpenVPN 进程。
 - 清理远端配置中的脚本、插件和管理接口等危险指令。
 - 在 Linux 上绑定 `tun0`，在 Windows 上自动识别 OpenVPN 网卡并绑定代理出站，避免流量绕过 VPN。
+- Linux 支持在单进程、单容器内额外启动最多 8 条独立隧道（`tun1`–`tun8`），每条隧道分配独立代理端口和策略路由表；Windows 继续使用单隧道模式。
 - 同一端口提供 HTTP、HTTPS CONNECT 和 SOCKS5 代理。
 - 支持在 Web 页面配置 HTTP/SOCKS5 代理认证；代理监听非本机地址时强制要求启用认证。
 - 支持可选的 HTTP Basic / SOCKS5 用户名密码认证。
@@ -112,7 +113,7 @@ docker compose up -d
 docker compose logs -f gatepilot
 ```
 
-默认发布 Web 端口 `8787`，代理端口仅绑定宿主机 `127.0.0.1:7928`。安装向导或 `ml proxy` 可将代理发布到公网；公网模式强制启用用户名密码认证。持久化数据和 Geo 规则文件保存在当前目录的 `data/`，Compose 发布配置保存在 `.env`。首次启动的管理地址、用户名和密码可通过日志查看，也保存在 `data/ui_auth.json`。
+默认发布 Web 端口 `8787`，主代理和附加隧道代理仅绑定宿主机 `127.0.0.1:7928–7936`。安装向导或 `ml proxy` 可将代理发布到公网；公网模式强制启用用户名密码认证。持久化数据和 Geo 规则文件保存在当前目录的 `data/`，Compose 发布配置保存在 `.env`。首次启动的管理地址、用户名和密码可通过日志查看，也保存在 `data/ui_auth.json`。
 
 镜像内置 Web 健康检查。`ml update-image` 会等待新容器进入 healthy 状态；检查失败时自动恢复更新前镜像并输出故障日志。
 
@@ -152,6 +153,7 @@ sudo ./gatepilot
 
 - Web 管理端口：`8787`
 - 本地 HTTP/SOCKS5 代理：`127.0.0.1:7928`
+- Linux 附加隧道代理：`127.0.0.1:7929–7936`
 - OpenVPN 虚拟网卡：Linux 为 `tun0`；Windows 自动识别 Wintun/TAP
 
 ## 代理使用
@@ -189,6 +191,7 @@ export LOCAL_PROXY_PASS=your-strong-password
 | `OPENVPN_CMD` | Linux 为 `openvpn`；Windows 优先查找程序旁 `openvpn\openvpn.exe` | OpenVPN 命令或完整路径 |
 | `LOCAL_PROXY_HOST` | `127.0.0.1` | 代理监听地址 |
 | `LOCAL_PROXY_PORT` | `7928` | 代理端口 |
+| `LOCAL_PROXY_TUNNEL_PORT_START` | `7929` | Linux 附加隧道代理起始端口，连续使用 8 个端口 |
 | `LOCAL_PROXY_PUBLISHED_HOST` | 空 | 容器代理发布地址；仅发布到本机时允许容器内监听 `0.0.0.0` |
 | `LOCAL_PROXY_MAX_CONNECTIONS` | `256` | 最大并发连接数 |
 | `LOCAL_PROXY_BIND_TUN` | `true` | 强制把代理出站绑定到 Linux `tun0` 或 Windows OpenVPN 网卡 |

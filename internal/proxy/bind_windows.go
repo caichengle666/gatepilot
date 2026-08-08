@@ -44,6 +44,11 @@ func DialVPN(address string, requireTun bool) (net.Conn, error) {
 	return dialer.DialContext(context.Background(), "tcp4", address)
 }
 
+// DialVPNOnDevice 在 Windows 上只支持当前活动的 OpenVPN 网卡。
+func DialVPNOnDevice(address string, requireTun bool, _ string) (net.Conn, error) {
+	return DialVPN(address, requireTun)
+}
+
 func resolveWindowsVPNHost(host string, iface net.Interface, localIP net.IP) (string, error) {
 	resolver := net.Resolver{
 		PreferGo: true,

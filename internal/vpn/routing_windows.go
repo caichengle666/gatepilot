@@ -41,6 +41,8 @@ func preparePolicyRouting() {
 	windowsVPNRoute.Unlock()
 }
 
+func openVPNControlArguments(_ string) []string { return nil }
+
 func setupPolicyRouting(_ string) {
 	for attempt := 0; attempt < 15; attempt++ {
 		if detectWindowsVPNAdapter() {
@@ -49,6 +51,12 @@ func setupPolicyRouting(_ string) {
 		time.Sleep(time.Second)
 	}
 }
+
+func setupDevicePolicyRouting(_ string, _ int) {}
+
+func setupEndpointMainRoute(_ string, _ int) bool { return false }
+
+func cleanupEndpointMainRoute(_ string, _ int) {}
 
 func detectWindowsVPNAdapter() bool {
 	interfaces, err := net.Interfaces()
@@ -147,6 +155,10 @@ func waitForVPNReady(timeout time.Duration) error {
 	return errors.New("OpenVPN 虚拟网卡未就绪，请确认以管理员/SYSTEM 权限运行并安装 Wintun/TAP/DCO 驱动")
 }
 
+func waitForDeviceReady(_ string, _ time.Duration) error {
+	return errors.New("附加 VPN 隧道仅支持 Linux")
+}
+
 func cleanupPolicyRouting() {
 	windowsVPNRoute.Lock()
 	before := windowsVPNRoute.before
@@ -172,6 +184,8 @@ func cleanupPolicyRouting() {
 		drainWindowsVPNRoutes(interfaceIndex, interfaceName)
 	}
 }
+
+func cleanupDevicePolicyRouting(_ string, _ int) {}
 
 func cleanupStaleVPNState(openVPNCommand string) {
 	_ = stopOpenVPNService(5 * time.Second)

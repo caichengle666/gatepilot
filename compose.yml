@@ -15,11 +15,13 @@ services:
       UI_PORT: "8787"
       LOCAL_PROXY_HOST: 0.0.0.0
       LOCAL_PROXY_PORT: "7928"
+      LOCAL_PROXY_TUNNEL_PORT_START: "7929"
       LOCAL_PROXY_PUBLISHED_HOST: ${GATEPILOT_PROXY_BIND:-127.0.0.1}
       LOCAL_PROXY_BIND_TUN: "true"
       TZ: ${TZ:-Asia/Shanghai}
     ports:
       - "${GATEPILOT_UI_BIND:-0.0.0.0}:${GATEPILOT_UI_PORT:-8787}:8787"
       - "${GATEPILOT_PROXY_BIND:-127.0.0.1}:${GATEPILOT_PROXY_PORT:-7928}:7928"
+      - "${GATEPILOT_PROXY_BIND:-127.0.0.1}:7929-7936:7929-7936"
     volumes:
       - ./data:/var/lib/gatepilot
