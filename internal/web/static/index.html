@@ -1603,7 +1603,7 @@ function renderTunnels() {
         <span class="badge available"><span class="badge-pulse"></span>${esc(tunnel.device)}</span>
         <strong>${esc(nodeLocation)}</strong>
         <span class="mono" style="color:var(--text-secondary);">${esc(tunnel.node_id)}</span>
-        <span>独立代理：<strong class="mono">${esc(proxyHost)}:${tunnel.proxy_port}</strong></span>
+        <span>独立代理：<strong class="mono">${esc(proxyHost)}:${tunnel.published_proxy_port || tunnel.proxy_port}</strong></span>
         <span>路由表：<strong>${tunnel.route_table}</strong></span>
       </div>
       <button class="btn-danger" style="height:32px; padding:0 12px; border-radius:7px;" onclick="disconnectTunnel('${esc(tunnel.device)}')">断开</button>
@@ -1719,7 +1719,7 @@ function render(){
   
   const statusMessage = state.status === "error" && state.message ? state.message : (state.last_check_message || "");
   const activeNodeInfo = activeNode ? `<span class="badge available" style="margin-left:8px; padding:2px 8px;">${esc(translateCountry(activeNode.country))} (${activeNode.id})</span>` : `<span class="badge unavailable" style="margin-left:8px; padding:2px 8px;">无</span>`;
-  const localProxy = state.local_proxy || `http://127.0.0.1:${state.proxy_port || 7928}`;
+  const localProxy = `http://${window.location.hostname || "127.0.0.1"}:${state.proxy_published_port || state.proxy_port || 7928}`;
   if ($("status")) { $("status").innerHTML=`<span class="status-dot"></span>HTTP 代理本地接口：${localProxy} | 活动节点：${activeNodeInfo} | 状态：${statusMessage}`; }
   
   const openvpnWarning = $("openvpn_warning");
@@ -2068,7 +2068,7 @@ async function connectTunnel(id) {
     if (!result.ok) {
       alert("创建附加隧道失败: " + (result.error || "未知错误"));
     } else {
-      alert(`${result.tunnel.device} 已启动，独立代理端口：${result.tunnel.proxy_port}`);
+      alert(`${result.tunnel.device} 已启动，独立代理端口：${result.tunnel.published_proxy_port || result.tunnel.proxy_port}`);
     }
   } catch (e) {
     alert("创建附加隧道请求失败");

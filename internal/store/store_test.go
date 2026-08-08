@@ -14,7 +14,8 @@ import (
 
 func TestLoadAppConfigDefaults(t *testing.T) {
 	for _, name := range []string{
-		"OPENVPN_AUTH_USER", "OPENVPN_AUTH_PASS", "LOCAL_PROXY_HOST", "LOCAL_PROXY_PORT", "LOCAL_PROXY_TUNNEL_PORT_START",
+		"OPENVPN_AUTH_USER", "OPENVPN_AUTH_PASS", "LOCAL_PROXY_HOST", "LOCAL_PROXY_PORT", "LOCAL_PROXY_PUBLISHED_PORT",
+		"LOCAL_PROXY_TUNNEL_PORT_START", "LOCAL_PROXY_TUNNEL_PUBLISHED_PORT_START",
 		"LOCAL_PROXY_MAX_CONNECTIONS", "UI_HOST", "UI_PORT", "FETCH_INTERVAL_SECONDS",
 		"RECONNECT_INTERVAL_SECONDS", "OPENVPN_TEST_TIMEOUT_SECONDS", "TARGET_VALID_NODES",
 		"MAX_SCAN_ROWS", "INVALID_BACKOFF_SECONDS", "MANUAL_TEST_NODE_LIMIT",
@@ -27,7 +28,7 @@ func TestLoadAppConfigDefaults(t *testing.T) {
 	if config.OpenVPNUser != "vpn" || config.OpenVPNPassword != "vpn" {
 		t.Fatalf("unexpected OpenVPN credentials: %q/%q", config.OpenVPNUser, config.OpenVPNPassword)
 	}
-	if config.ProxyHost != "127.0.0.1" || config.ProxyPort != 7928 || config.TunnelProxyPortStart != 7929 || config.ProxyMaxConnections != 256 {
+	if config.ProxyHost != "127.0.0.1" || config.ProxyPort != 7928 || config.ProxyPublishedPort != 7928 || config.TunnelProxyPortStart != 7929 || config.TunnelProxyPublishedPortStart != 7929 || config.ProxyMaxConnections != 256 {
 		t.Fatalf("unexpected proxy defaults: %+v", config)
 	}
 	if config.UIHost != "127.0.0.1" || config.UIPort != 8787 {

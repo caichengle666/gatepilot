@@ -270,7 +270,7 @@ func (a *Application) handleGET(writer http.ResponseWriter, request *http.Reques
 		for index := range nodes {
 			nodes[index].ConfigText = ""
 		}
-		writeJSONResponse(writer, http.StatusOK, map[string]any{"nodes": nodes, "state": statePayload(ui, state), "ui_config": publicUIConfig(ui)})
+		writeJSONResponse(writer, http.StatusOK, map[string]any{"nodes": nodes, "state": statePayload(a.Store.Config, ui, state), "ui_config": publicUIConfig(ui)})
 	case path == "/api/gateway_status":
 		writeJSONResponse(writer, http.StatusOK, a.gatewayStatus())
 	case path == "/api/traffic":
@@ -315,7 +315,7 @@ func publicUIConfig(ui store.UIConfig) map[string]any {
 	}
 }
 
-func statePayload(ui store.UIConfig, state store.RuntimeState) map[string]any {
+func statePayload(config store.AppConfig, ui store.UIConfig, state store.RuntimeState) map[string]any {
 	data, _ := json.Marshal(state)
 	result := map[string]any{}
 	_ = json.Unmarshal(data, &result)
@@ -324,6 +324,7 @@ func statePayload(ui store.UIConfig, state store.RuntimeState) map[string]any {
 	result["secret_path"] = ui.SecretPath
 	result["password_set"] = ui.Password != ""
 	result["proxy_port"] = ui.ProxyPort
+	result["proxy_published_port"] = config.ProxyPublishedPort
 	result["proxy_auth_enabled"] = ui.ProxyAuthEnabled
 	result["proxy_username"] = ui.ProxyUsername
 	result["proxy_password_set"] = ui.ProxyPassword != ""

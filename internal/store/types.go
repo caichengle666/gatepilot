@@ -40,51 +40,53 @@ type Node struct {
 
 // AppConfig 是应用启动配置，来自环境变量。
 type AppConfig struct {
-	APIURL               string
-	DataDir              string
-	OpenVPNCommand       string
-	OpenVPNUser          string
-	OpenVPNPassword      string
-	ProxyHost            string
-	ProxyPort            int
-	TunnelProxyPortStart int
-	ProxyMaxConnections  int
-	UIHost               string
-	UIPort               int
-	FetchInterval        time.Duration
-	ReconnectInterval    time.Duration
-	OpenVPNTimeout       time.Duration
-	TargetValidNodes     int
-	MaxScanRows          int
-	InvalidBackoff       time.Duration
-	ManualTestNodeLimit  int
-	InitialTestLimit     int
-	DisableBackground    bool
+	APIURL                        string
+	DataDir                       string
+	OpenVPNCommand                string
+	OpenVPNUser                   string
+	OpenVPNPassword               string
+	ProxyHost                     string
+	ProxyPort                     int
+	ProxyPublishedPort            int
+	TunnelProxyPortStart          int
+	TunnelProxyPublishedPortStart int
+	ProxyMaxConnections           int
+	UIHost                        string
+	UIPort                        int
+	FetchInterval                 time.Duration
+	ReconnectInterval             time.Duration
+	OpenVPNTimeout                time.Duration
+	TargetValidNodes              int
+	MaxScanRows                   int
+	InvalidBackoff                time.Duration
+	ManualTestNodeLimit           int
+	InitialTestLimit              int
+	DisableBackground             bool
 }
 
 // UIConfig 是 Web 管理界面的运行时配置，持久化到磁盘。
 type UIConfig struct {
-	Username          string   `json:"username"`
-	SecretPath        string   `json:"secret_path"`
-	Password          string   `json:"password"`
-	Host              string   `json:"host"`
-	Port              int      `json:"port"`
-	ProxyPort         int      `json:"proxy_port"`
-	ProxyAuthEnabled  bool     `json:"proxy_auth_enabled"`
-	ProxyUsername     string   `json:"proxy_username"`
-	ProxyPassword     string   `json:"proxy_password"`
-	UpstreamProxy     string   `json:"upstream_proxy"`
-	SpeedTestURL      string   `json:"speed_test_url"`
-	RoutingMode       string   `json:"routing_mode"`
-	ForceCountry      string   `json:"force_country"`
-	RoutingIPType     string   `json:"routing_ip_type"`
-	ConnectionEnabled bool     `json:"connection_enabled"`
-	FixedNodeID       string   `json:"fixed_node_id"`
-	FavoriteNodeIDs   []string `json:"favorite_node_ids"`
-	FavoriteFallback  bool     `json:"fav_fail_fallback"`
-	SplitRouting      bool     `json:"split_routing"`
+	Username          string      `json:"username"`
+	SecretPath        string      `json:"secret_path"`
+	Password          string      `json:"password"`
+	Host              string      `json:"host"`
+	Port              int         `json:"port"`
+	ProxyPort         int         `json:"proxy_port"`
+	ProxyAuthEnabled  bool        `json:"proxy_auth_enabled"`
+	ProxyUsername     string      `json:"proxy_username"`
+	ProxyPassword     string      `json:"proxy_password"`
+	UpstreamProxy     string      `json:"upstream_proxy"`
+	SpeedTestURL      string      `json:"speed_test_url"`
+	RoutingMode       string      `json:"routing_mode"`
+	ForceCountry      string      `json:"force_country"`
+	RoutingIPType     string      `json:"routing_ip_type"`
+	ConnectionEnabled bool        `json:"connection_enabled"`
+	FixedNodeID       string      `json:"fixed_node_id"`
+	FavoriteNodeIDs   []string    `json:"favorite_node_ids"`
+	FavoriteFallback  bool        `json:"fav_fail_fallback"`
+	SplitRouting      bool        `json:"split_routing"`
 	SplitRules        []SplitRule `json:"split_rules,omitempty"`
-	SplitDefault      string   `json:"split_default"`
+	SplitDefault      string      `json:"split_default"`
 }
 
 // RuntimeState 是运行时状态，部分持久化。

@@ -27,8 +27,8 @@ iptables() {
         "-X GATEPILOT") chain_exists=0 ;;
         "-C FORWARD -p tcp --dport 8787 -j ACCEPT") [ "$legacy_web_rule" = "1" ] ;;
         "-D FORWARD -p tcp --dport 8787 -j ACCEPT") legacy_web_rule=0 ;;
-        "-C FORWARD -p tcp --dport 7928 -j ACCEPT") [ "$legacy_proxy_rule" = "1" ] ;;
-        "-D FORWARD -p tcp --dport 7928 -j ACCEPT") legacy_proxy_rule=0 ;;
+        "-C FORWARD -p tcp --dport 17928 -j ACCEPT") [ "$legacy_proxy_rule" = "1" ] ;;
+        "-D FORWARD -p tcp --dport 17928 -j ACCEPT") legacy_proxy_rule=0 ;;
         "-L FORWARD -n --line-numbers") printf '8 REJECT all -- 0.0.0.0/0 0.0.0.0/0\n' ;;
         "-N GATEPILOT") chain_exists=1 ;;
         "-I FORWARD 8 -j GATEPILOT") jump_exists=1 ;;
@@ -50,14 +50,16 @@ cat > "$TEST_DIR/.env" <<'EOF'
 GATEPILOT_UI_BIND=0.0.0.0
 GATEPILOT_UI_PORT=8787
 GATEPILOT_PROXY_BIND=0.0.0.0
-GATEPILOT_PROXY_PORT=7928
+GATEPILOT_PROXY_PORT=17928
+GATEPILOT_TUNNEL_PROXY_PORT_START=17929
+GATEPILOT_TUNNEL_PROXY_PORT_END=17936
 EOF
 configure_docker_firewall
 assert_logged "-D FORWARD -p tcp --dport 8787 -j ACCEPT"
-assert_logged "-D FORWARD -p tcp --dport 7928 -j ACCEPT"
+assert_logged "-D FORWARD -p tcp --dport 17928 -j ACCEPT"
 assert_logged "-A GATEPILOT -p tcp --dport 8787 -j ACCEPT"
-assert_logged "-A GATEPILOT -p tcp --dport 7928 -j ACCEPT"
-assert_logged "-A GATEPILOT -p tcp --dport 7929:7936 -j ACCEPT"
+assert_logged "-A GATEPILOT -p tcp --dport 17928 -j ACCEPT"
+assert_logged "-A GATEPILOT -p tcp --dport 17929:17936 -j ACCEPT"
 [ -f "$TEST_DIR/data/.firewall_chain_migrated" ]
 
 : > "$IPTABLES_LOG"

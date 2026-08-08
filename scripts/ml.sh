@@ -73,13 +73,15 @@ remove_gatepilot_firewall() {
 }
 
 configure_docker_firewall() {
-    local web_bind web_port proxy_bind proxy_port reject_line migration_marker
+    local web_bind web_port proxy_bind proxy_port tunnel_proxy_port_start tunnel_proxy_port_end reject_line migration_marker
     local -a public_ports=()
     command -v iptables >/dev/null 2>&1 || return 0
     web_bind=$(compose_env_value GATEPILOT_UI_BIND 0.0.0.0)
     web_port=$(compose_env_value GATEPILOT_UI_PORT 8787)
     proxy_bind=$(compose_env_value GATEPILOT_PROXY_BIND 127.0.0.1)
     proxy_port=$(compose_env_value GATEPILOT_PROXY_PORT 7928)
+    tunnel_proxy_port_start=$(compose_env_value GATEPILOT_TUNNEL_PROXY_PORT_START 7929)
+    tunnel_proxy_port_end=$(compose_env_value GATEPILOT_TUNNEL_PROXY_PORT_END 7936)
     migration_marker="$INSTALL_DIR/data/.firewall_chain_migrated"
     if [ ! -f "$migration_marker" ]; then
         while iptables -C FORWARD -p tcp --dport "$web_port" -j ACCEPT >/dev/null 2>&1; do
@@ -93,7 +95,7 @@ configure_docker_firewall() {
     fi
     [ "$web_bind" = "127.0.0.1" ] || public_ports+=("$web_port")
     if [ "$proxy_bind" != "127.0.0.1" ]; then
-        public_ports+=("$proxy_port" "7929:7936")
+        public_ports+=("$proxy_port" "${tunnel_proxy_port_start}:${tunnel_proxy_port_end}")
     fi
     remove_gatepilot_firewall
     if [ "${#public_ports[@]}" -eq 0 ]; then
@@ -325,6 +327,8 @@ configure_ports() {
     if [ "$DOCKER_MODE" = "1" ]; then
         set_compose_env_value GATEPILOT_UI_PORT "$web_port"
         set_compose_env_value GATEPILOT_PROXY_PORT "$proxy_port"
+        set_compose_env_value GATEPILOT_TUNNEL_PROXY_PORT_START "$((proxy_port + 1))"
+        set_compose_env_value GATEPILOT_TUNNEL_PROXY_PORT_END "$((proxy_port + 8))"
     else
         set_json_number port "$web_port"
         set_json_number proxy_port "$proxy_port"

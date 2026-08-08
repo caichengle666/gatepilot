@@ -38,13 +38,14 @@ const maxAdditionalTunnels = 8
 
 // TunnelStatus 描述一条 Linux 附加 VPN 隧道及其独立代理入口。
 type TunnelStatus struct {
-	Device    string `json:"device"`
-	NodeID    string `json:"node_id"`
-	ProxyPort int    `json:"proxy_port"`
-	Table     int    `json:"route_table"`
-	Status    string `json:"status"`
-	Message   string `json:"message"`
-	StartedAt int64  `json:"started_at"`
+	Device             string `json:"device"`
+	NodeID             string `json:"node_id"`
+	ProxyPort          int    `json:"proxy_port"`
+	PublishedProxyPort int    `json:"published_proxy_port"`
+	Table              int    `json:"route_table"`
+	Status             string `json:"status"`
+	Message            string `json:"message"`
+	StartedAt          int64  `json:"started_at"`
 }
 
 type managedTunnel struct {
@@ -729,7 +730,8 @@ func (c *Controller) ConnectTunnel(ctx context.Context, nodeID string, proxyPort
 	}
 	device := fmt.Sprintf("tun%d", index)
 	tunnel := &managedTunnel{TunnelStatus: TunnelStatus{
-		Device: device, NodeID: nodeID, ProxyPort: proxyPort, Table: 100 + index,
+		Device: device, NodeID: nodeID, ProxyPort: proxyPort,
+		PublishedProxyPort: c.application.Config.TunnelProxyPublishedPortStart + index - 1, Table: 100 + index,
 		Status: "connecting", Message: "正在建立附加隧道", StartedAt: time.Now().Unix(),
 	}}
 	tunnel.endpointHost = store.FirstNonEmpty(candidate.RemoteHost, candidate.IP)
