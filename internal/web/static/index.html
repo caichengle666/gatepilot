@@ -1597,7 +1597,7 @@ function renderTunnels() {
   const cards = tunnels.map(tunnel => {
     const node = nodes.find(item => item && item.id === tunnel.node_id) || {};
     const nodeLocation = node.location || translateCountry(node.country) || tunnel.node_id;
-    const nodeIP = node.ip || node.remote_host || "-";
+    const nodeIP = tunnel.node_ip || node.ip || node.remote_host || "-";
     const proxyHost = window.location.hostname || "127.0.0.1";
     const healthStatus = tunnel.health_status || "checking";
     const healthText = healthStatus === "healthy" ? "代理正常" : healthStatus === "unhealthy" ? "代理异常" : "检测中";

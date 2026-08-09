@@ -40,6 +40,7 @@ const maxAdditionalTunnels = 8
 type TunnelStatus struct {
 	Device             string `json:"device"`
 	NodeID             string `json:"node_id"`
+	NodeIP             string `json:"node_ip"`
 	ProxyPort          int    `json:"proxy_port"`
 	PublishedProxyPort int    `json:"published_proxy_port"`
 	Table              int    `json:"route_table"`
@@ -765,7 +766,7 @@ func (c *Controller) connectTunnel(ctx context.Context, nodeID string, proxyPort
 	}
 	device := fmt.Sprintf("tun%d", index)
 	tunnel := &managedTunnel{TunnelStatus: TunnelStatus{
-		Device: device, NodeID: nodeID, ProxyPort: proxyPort,
+		Device: device, NodeID: nodeID, NodeIP: store.FirstNonEmpty(candidate.IP, candidate.RemoteHost), ProxyPort: proxyPort,
 		PublishedProxyPort: c.application.Config.TunnelProxyPublishedPortStart + index - 1, Table: 100 + index,
 		Status: "connecting", Message: "正在建立附加隧道", HealthStatus: "checking", StartedAt: time.Now().Unix(),
 	}}
