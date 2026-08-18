@@ -715,65 +715,89 @@ func (a *Application) maintainLocked(ctx context.Context, force bool) (string, e
 		state.MaintenanceRunning = false
 		state.IsConnecting = false
 	})
-	if force || len(a.Store.Candidates()) == 0 {
-		if _, err := a.Store.RefreshNodes(ctx); err != nil && len(a.Store.Candidates()) == 0 {
-			return "", err
-		}
-	}
-	candidates := a.Store.Candidates()
-	valid := 0
-	for _, candidate := range candidates {
-		if candidate.ProbeStatus == "available" {
-			valid++
-		}
-	}
-	ids := make([]string, 0, a.Store.Config.InitialTestLimit)
-	for _, candidate := range candidates {
-		if valid+len(ids) >= a.Store.Config.TargetValidNodes || len(ids) >= a.Store.Config.InitialTestLimit {
-			break
-		}
-		if candidate.ProbeStatus != "available" {
-			ids = append(ids, candidate.ID)
-		}
-	}
-	tested := a.VPN.TestNodesContext(ctx, ids)
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	valid = 0
-	for _, candidate := range a.Store.Candidates() {
-		if candidate.ProbeStatus == "available" {
-			valid++
-		}
-	}
-	_ = a.Store.UpdateState(func(state *store.RuntimeState) {
-		state.LastCheckAt = time.Now().Unix()
-		state.ValidNodes = valid
-		state.LastCheckMessage = fmt.Sprintf("节点维护完成，可用 %d 个", valid)
-	})
-	ui, _, _ := a.Store.Snapshot()
-	if ui.ConnectionEnabled && !a.VPN.Running() {
-		if ui.RoutingMode == "fixed_ip" && ui.FixedNodeID != "" {
-			return a.VPN.ConnectContext(ctx, ui.FixedNodeID)
-		}
-		attempts := 0
-		for _, candidate := range a.Store.Candidates() {
-			if err := ctx.Err(); err != nil {
+	testedTotal := 0
+	for refreshRound := 0; refreshRound < 2; refreshRound++ {
+		if refreshRound > 0 {
+			_ = a.Store.UpdateState(func(state *store.RuntimeState) {
+				state.LastCheckMessage = "连接连续失败，正在重新拉取节点列表"
+			})
+			a.Store.LogEvent("warning", "Collector", "自动连接连续失败，重新拉取 VPNGate 节点列表")
+			if _, err := a.Store.RefreshNodes(ctx); err != nil && len(a.Store.Candidates()) == 0 {
 				return "", err
 			}
-			if candidate.ProbeStatus != "available" {
-				continue
+		} else if force || len(a.Store.Candidates()) == 0 {
+			if _, err := a.Store.RefreshNodes(ctx); err != nil && len(a.Store.Candidates()) == 0 {
+				return "", err
 			}
-			attempts++
-			if message, err := a.VPN.ConnectContext(ctx, candidate.ID); err == nil {
+		}
+
+		candidates := a.Store.Candidates()
+		valid := 0
+		for _, candidate := range candidates {
+			if candidate.ProbeStatus == "available" {
+				valid++
+			}
+		}
+		ids := make([]string, 0, a.Store.Config.InitialTestLimit)
+		for _, candidate := range candidates {
+			if valid+len(ids) >= a.Store.Config.TargetValidNodes || len(ids) >= a.Store.Config.InitialTestLimit {
+				break
+			}
+			if candidate.ProbeStatus != "available" {
+				ids = append(ids, candidate.ID)
+			}
+		}
+		tested := a.VPN.TestNodesContext(ctx, ids)
+		testedTotal += len(tested)
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		valid = 0
+		for _, candidate := range a.Store.Candidates() {
+			if candidate.ProbeStatus == "available" {
+				valid++
+			}
+		}
+		_ = a.Store.UpdateState(func(state *store.RuntimeState) {
+			state.LastCheckAt = time.Now().Unix()
+			state.ValidNodes = valid
+			state.LastCheckMessage = fmt.Sprintf("节点维护完成，可用 %d 个", valid)
+		})
+
+		ui, _, _ := a.Store.Snapshot()
+		if !ui.ConnectionEnabled || a.VPN.Running() {
+			return fmt.Sprintf("节点维护完成，测试了 %d 个节点，可用 %d 个", testedTotal, valid), nil
+		}
+		if ui.RoutingMode == "fixed_ip" && ui.FixedNodeID != "" {
+			if message, err := a.VPN.ConnectContext(ctx, ui.FixedNodeID); err == nil {
 				return message, nil
 			}
-			if attempts >= 3 {
-				break
+		} else {
+			attempts := 0
+			var lastErr error
+			for _, candidate := range a.Store.Candidates() {
+				if err := ctx.Err(); err != nil {
+					return "", err
+				}
+				if candidate.ProbeStatus != "available" {
+					continue
+				}
+				attempts++
+				if message, err := a.VPN.ConnectContext(ctx, candidate.ID); err == nil {
+					return message, nil
+				} else {
+					lastErr = err
+				}
+				if attempts >= 3 {
+					break
+				}
+			}
+			if refreshRound == 1 && lastErr != nil {
+				return "", fmt.Errorf("自动连接连续失败: %w", lastErr)
 			}
 		}
 	}
-	return fmt.Sprintf("节点维护完成，测试了 %d 个节点，可用 %d 个", len(tested), valid), nil
+	return "", errors.New("自动连接失败，等待下一轮节点维护")
 }
 
 func (a *Application) updateCredentials(writer http.ResponseWriter, request *http.Request) {

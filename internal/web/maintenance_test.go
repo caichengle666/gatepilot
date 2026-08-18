@@ -1,6 +1,14 @@
 package web
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/caichengle666/gatepilot/internal/store"
+	"github.com/caichengle666/gatepilot/internal/vpn"
+)
 
 func TestIsLocalProxyEnvironmentFailure(t *testing.T) {
 	tests := []struct {
@@ -16,5 +24,67 @@ func TestIsLocalProxyEnvironmentFailure(t *testing.T) {
 		if got := isLocalProxyEnvironmentFailure(test.message); got != test.want {
 			t.Fatalf("isLocalProxyEnvironmentFailure(%q) = %v, want %v", test.message, got, test.want)
 		}
+	}
+}
+
+func TestMaintainRefreshesNodesAfterAutomaticConnectionFailures(t *testing.T) {
+	refreshes := 0
+	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		refreshes++
+		http.Error(writer, "temporary failure", http.StatusBadGateway)
+	}))
+	defer api.Close()
+
+	config := store.LoadAppConfig()
+	config.DataDir = t.TempDir()
+	config.APIURL = api.URL
+	config.DisableBackground = true
+	config.InitialTestLimit = 0
+	application, err := store.New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	application.Nodes = []store.Node{
+		{ID: "node-1", ProbeStatus: "available", ConfigFile: "node-1.ovpn"},
+		{ID: "node-2", ProbeStatus: "available", ConfigFile: "node-2.ovpn"},
+		{ID: "node-3", ProbeStatus: "available", ConfigFile: "node-3.ovpn"},
+	}
+	application.Config.TargetValidNodes = 3
+	webApp := NewApplication(application, vpn.NewController(application))
+
+	if _, err := webApp.maintainLocked(context.Background(), false); err == nil {
+		t.Fatal("expected automatic connection to fail")
+	}
+	if refreshes != 1 {
+		t.Fatalf("node API refreshes = %d, want 1 after three failed connections", refreshes)
+	}
+}
+
+func TestMaintainDoesNotRefreshAfterManualDisconnect(t *testing.T) {
+	refreshes := 0
+	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		refreshes++
+		http.Error(writer, "unexpected refresh", http.StatusBadGateway)
+	}))
+	defer api.Close()
+
+	config := store.LoadAppConfig()
+	config.DataDir = t.TempDir()
+	config.APIURL = api.URL
+	config.DisableBackground = true
+	application, err := store.New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	application.Config.InitialTestLimit = 0
+	application.Nodes = []store.Node{{ID: "node-1", ProbeStatus: "available", ConfigFile: "node-1.ovpn"}}
+	application.SetConnectionEnabled(false)
+	webApp := NewApplication(application, vpn.NewController(application))
+
+	if _, err := webApp.maintainLocked(context.Background(), false); err != nil {
+		t.Fatalf("manual disconnect maintenance failed: %v", err)
+	}
+	if refreshes != 0 {
+		t.Fatalf("node API refreshes = %d after manual disconnect, want 0", refreshes)
 	}
 }
