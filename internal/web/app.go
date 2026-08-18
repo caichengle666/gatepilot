@@ -36,7 +36,12 @@ type Application struct {
 	loginMu           sync.Mutex
 	logins            map[string]loginFailure
 	Operations        operationLock
+	autoSwitchMu      sync.Mutex
 	speedTests        sync.Mutex
+	proxyHealthMu     sync.Mutex
+	proxyHealthFails  int
+	failureRefreshMu  sync.Mutex
+	lastFailureRefresh time.Time
 	maintenanceMu     sync.Mutex
 	maintenanceCancel context.CancelFunc
 	tunnelProxyMu     sync.Mutex
@@ -718,12 +723,18 @@ func (a *Application) maintainLocked(ctx context.Context, force bool) (string, e
 	testedTotal := 0
 	for refreshRound := 0; refreshRound < 2; refreshRound++ {
 		if refreshRound > 0 {
-			_ = a.Store.UpdateState(func(state *store.RuntimeState) {
-				state.LastCheckMessage = "连接连续失败，正在重新拉取节点列表"
-			})
-			a.Store.LogEvent("warning", "Collector", "自动连接连续失败，重新拉取 VPNGate 节点列表")
-			if _, err := a.Store.RefreshNodes(ctx); err != nil && len(a.Store.Candidates()) == 0 {
-				return "", err
+			if a.allowFailureRefresh() {
+				_ = a.Store.UpdateState(func(state *store.RuntimeState) {
+					state.LastCheckMessage = "连接连续失败，正在重新拉取节点列表"
+				})
+				a.Store.LogEvent("warning", "Collector", "自动连接连续失败，重新拉取 VPNGate 节点列表")
+				if _, err := a.Store.RefreshNodes(ctx); err != nil && len(a.Store.Candidates()) == 0 {
+					return "", err
+				}
+			} else {
+				_ = a.Store.UpdateState(func(state *store.RuntimeState) {
+					state.LastCheckMessage = "连接连续失败，等待节点刷新退避"
+				})
 			}
 		} else if force || len(a.Store.Candidates()) == 0 {
 			if _, err := a.Store.RefreshNodes(ctx); err != nil && len(a.Store.Candidates()) == 0 {

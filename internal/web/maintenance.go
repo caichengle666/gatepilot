@@ -17,7 +17,11 @@ import (
 	"github.com/caichengle666/gatepilot/internal/vpn"
 )
 
-const maxSpeedTestBytes int64 = 20_000_000
+const (
+	maxSpeedTestBytes       int64 = 20_000_000
+	maxProxyHealthFailures        = 3
+	failureRefreshBackoff         = time.Minute
+)
 
 type speedTestResult struct {
 	OK         bool    `json:"ok"`
@@ -114,6 +118,8 @@ func (a *Application) TriggerAutoSwitch(failures int) {
 }
 
 func (a *Application) autoSwitch(attempt int) {
+	a.autoSwitchMu.Lock()
+	defer a.autoSwitchMu.Unlock()
 	if attempt >= 3 {
 		a.Store.LogEvent("error", "VPN", "连续自动切换失败 3 次，等待后台重新获取节点")
 		a.retryAfterAutoSwitchFailure()
@@ -178,6 +184,34 @@ func (a *Application) retryAfterAutoSwitchFailure() {
 	}
 }
 
+func (a *Application) allowFailureRefresh() bool {
+	a.failureRefreshMu.Lock()
+	defer a.failureRefreshMu.Unlock()
+	now := time.Now()
+	if !a.lastFailureRefresh.IsZero() && now.Sub(a.lastFailureRefresh) < failureRefreshBackoff {
+		return false
+	}
+	a.lastFailureRefresh = now
+	return true
+}
+
+func (a *Application) recordProxyHealth(ok bool) int {
+	a.proxyHealthMu.Lock()
+	defer a.proxyHealthMu.Unlock()
+	if ok {
+		a.proxyHealthFails = 0
+		return 0
+	}
+	a.proxyHealthFails++
+	return a.proxyHealthFails
+}
+
+func (a *Application) resetProxyHealth() {
+	a.proxyHealthMu.Lock()
+	a.proxyHealthFails = 0
+	a.proxyHealthMu.Unlock()
+}
+
 func (a *Application) proxyChecker() {
 	time.Sleep(30 * time.Second)
 	for {
@@ -186,18 +220,31 @@ func (a *Application) proxyChecker() {
 		if !state.IsConnecting {
 			result := a.CheckProxyHealth()
 			a.updateProxyState(result)
-			if ok, _ := result["ok"].(bool); !ok && a.VPN.Running() {
+			ok, _ := result["ok"].(bool)
+			if !a.VPN.Running() {
+				a.resetProxyHealth()
+			} else if !ok {
 				errorMessage := fmt.Sprint(result["error"])
-				if !isLocalProxyEnvironmentFailure(errorMessage) {
+				if isLocalProxyEnvironmentFailure(errorMessage) {
+					a.resetProxyHealth()
+					a.Store.LogEvent("warning", "VPN", "代理出口健康检查失败，但属于本机环境/路由问题，不切换节点: "+errorMessage)
+					continue
+				}
+				failures := a.recordProxyHealth(false)
+				if failures < maxProxyHealthFailures {
+					a.Store.LogEvent("warning", "VPN", fmt.Sprintf("代理出口健康检查失败（%d/%d），暂不切换节点: %s", failures, maxProxyHealthFailures, errorMessage))
+					continue
+				}
+				if failures >= maxProxyHealthFailures {
 					_, state, _ := a.Store.Snapshot()
 					if candidate, found := a.Store.NodeByID(state.ActiveNodeID); found {
 						a.Store.MarkBlacklisted(candidate, errorMessage)
 					}
 					a.VPN.Stop("代理出口健康检查失败")
 					go a.autoSwitch(0)
-				} else {
-					a.Store.LogEvent("warning", "VPN", "代理出口健康检查失败，但属于本机环境/路由问题，不切换节点: "+errorMessage)
 				}
+			} else {
+				a.recordProxyHealth(true)
 			}
 		}
 		time.Sleep(30 * time.Second)

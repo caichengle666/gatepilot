@@ -88,3 +88,35 @@ func TestMaintainDoesNotRefreshAfterManualDisconnect(t *testing.T) {
 		t.Fatalf("node API refreshes = %d after manual disconnect, want 0", refreshes)
 	}
 }
+
+func TestProxyHealthFailureThreshold(t *testing.T) {
+	application := &Application{}
+	if got := application.recordProxyHealth(false); got != 1 {
+		t.Fatalf("first proxy failure count = %d, want 1", got)
+	}
+	if got := application.recordProxyHealth(false); got != 2 {
+		t.Fatalf("second proxy failure count = %d, want 2", got)
+	}
+	if got := application.recordProxyHealth(false); got != maxProxyHealthFailures {
+		t.Fatalf("threshold proxy failure count = %d, want %d", got, maxProxyHealthFailures)
+	}
+	if got := application.recordProxyHealth(true); got != 0 {
+		t.Fatalf("successful proxy check count = %d, want 0", got)
+	}
+}
+
+func TestFailureRefreshBackoff(t *testing.T) {
+	application := &Application{}
+	if !application.allowFailureRefresh() {
+		t.Fatal("first failure refresh should be allowed")
+	}
+	if application.allowFailureRefresh() {
+		t.Fatal("failure refresh should be throttled during backoff")
+	}
+	application.failureRefreshMu.Lock()
+	application.lastFailureRefresh = application.lastFailureRefresh.Add(-failureRefreshBackoff)
+	application.failureRefreshMu.Unlock()
+	if !application.allowFailureRefresh() {
+		t.Fatal("failure refresh should be allowed after backoff")
+	}
+}

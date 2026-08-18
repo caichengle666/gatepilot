@@ -669,6 +669,7 @@ func (c *Controller) monitor(command managedOpenVPNProcess, candidate store.Node
 	}
 	_, state, _ := c.application.Snapshot()
 	if state.ActiveNodeID == candidate.ID {
+		c.application.UpdateNodeProbe(candidate.ID, false, 0, message)
 		_ = c.application.SetState("disconnected", message, "")
 		_ = c.application.UpdateState(func(state *store.RuntimeState) { state.ActiveNodeLatency = "无活动连接" })
 	}
