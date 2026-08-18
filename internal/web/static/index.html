@@ -392,10 +392,12 @@
 
     .table-container {
       overflow-x: auto;
+      scrollbar-width: thin;
     }
 
     table {
       width: 100%;
+      min-width: 1180px;
       border-collapse: collapse;
       text-align: left;
       table-layout: fixed;
@@ -504,6 +506,8 @@
     .table-actions {
       display: flex;
       gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
     }
 
     .connect-btn {
@@ -1027,7 +1031,7 @@
             <th style="width: 120px;">官方带宽</th>
             <th style="width: 110px;">IP 类型</th>
             <th style="width: 150px;">节点延迟</th>
-            <th style="width: 210px;">操作</th>
+            <th style="width: 260px;">操作</th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
