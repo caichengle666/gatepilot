@@ -116,6 +116,7 @@ func (a *Application) TriggerAutoSwitch(failures int) {
 func (a *Application) autoSwitch(attempt int) {
 	if attempt >= 3 {
 		a.Store.LogEvent("error", "VPN", "连续自动切换失败 3 次，等待后台重新获取节点")
+		a.retryAfterAutoSwitchFailure()
 		return
 	}
 	ui, state, _ := a.Store.Snapshot()
@@ -133,6 +134,7 @@ func (a *Application) autoSwitch(attempt int) {
 		a.Operations.unlockIfOwned()
 		if err != nil {
 			a.Store.LogEvent("warning", "VPN", "固定节点重连失败: "+err.Error())
+			a.retryAfterAutoSwitchFailure()
 		}
 		return
 	}
@@ -158,10 +160,22 @@ func (a *Application) autoSwitch(attempt int) {
 		a.Store.LogEvent("warning", "VPN", fmt.Sprintf("切换节点 %s 失败: %v", candidate.ID, err))
 		attempt++
 		if attempt >= 3 {
+			a.retryAfterAutoSwitchFailure()
 			return
 		}
 	}
 	a.VPN.Stop("没有符合规则的可用备用节点")
+	a.retryAfterAutoSwitchFailure()
+}
+
+func (a *Application) retryAfterAutoSwitchFailure() {
+	ui, _, _ := a.Store.Snapshot()
+	if !ui.ConnectionEnabled || a.Store.Config.DisableBackground {
+		return
+	}
+	if _, err := a.maintain(context.Background(), false); err != nil {
+		a.Store.LogEvent("warning", "VPN", "自动切换后刷新节点并重连失败: "+err.Error())
+	}
 }
 
 func (a *Application) proxyChecker() {

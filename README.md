@@ -201,7 +201,7 @@ export LOCAL_PROXY_PASS=your-strong-password
 | `UI_PORT` | `8787` | Web 端口 |
 | `UPSTREAM_PROXY` | 空 | 前置代理初始值；可在 Web 页面修改，用于拉取节点列表和帮助 TCP 节点建立隧道 |
 | `SPEED_TEST_URL` | Cloudflare 10 MB 下载接口 | 宽带测速地址；可在 Web 页面修改，单次最多读取 20 MB |
-| `RECONNECT_INTERVAL_SECONDS` | `15` | 断线检查和自动重连周期 |
+| `RECONNECT_INTERVAL_SECONDS` | `15` | 断线检查和自动重连周期；连续连接失败后会重新拉取节点列表并重试 |
 | `TARGET_VALID_NODES` | `3` | 每轮探测节点数 |
 | `DISABLE_BACKGROUND_FETCH` | `false` | 禁用后台拉取，适合开发测试 |
 
