@@ -59,6 +59,7 @@ func LoadAppConfig() AppConfig {
 		ManualTestNodeLimit:           EnvInt("MANUAL_TEST_NODE_LIMIT", 5, 1, 20),
 		InitialTestLimit:              EnvInt("INITIAL_CONNECT_TEST_LIMIT", 10, 1, 50),
 		DisableBackground:             EnvBool("DISABLE_BACKGROUND_FETCH", false),
+		DockerMode:                    EnvBool("GATEPILOT_DOCKER", false),
 	}
 }
 
@@ -168,6 +169,11 @@ func New(config AppConfig) (*Store, error) {
 		FavoriteNodeIDs:   []string{},
 	}
 	_ = readJSON(filepath.Join(config.DataDir, "ui_auth.json"), &ui)
+	if config.DockerMode {
+		ui.Host = config.UIHost
+		ui.Port = config.UIPort
+		ui.ProxyPort = config.ProxyPort
+	}
 	if ui.Port < 1 || ui.Port > 65535 {
 		ui.Port = config.UIPort
 	}

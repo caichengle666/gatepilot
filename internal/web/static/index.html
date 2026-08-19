@@ -1262,6 +1262,7 @@
         <div class="form-group" style="margin-bottom: 16px;">
           <label class="form-label" for="net_proxy_port">HTTP/SOCKS5 代理出站端口</label>
           <input type="number" id="net_proxy_port" class="input-field" required min="1024" max="65535" placeholder="7928">
+          <div id="net_proxy_port_help" style="display: none; font-size: 12px; color: var(--text-secondary); margin-top: 6px;">Docker 模式请使用 <span class="mono">ml port</span> 修改端口。</div>
         </div>
 
         <div class="form-group" style="margin-bottom: 16px;">
@@ -2669,6 +2670,8 @@ function openNetworkModal() {
   
   if (state) {
     $("net_proxy_port").value = state.proxy_port || 7928;
+    $("net_proxy_port").disabled = !!state.docker_mode;
+    $("net_proxy_port_help").style.display = state.docker_mode ? "block" : "none";
     $("net_proxy_auth_enabled").checked = !!state.proxy_auth_enabled;
     $("net_proxy_username").value = state.proxy_username || "";
     $("net_proxy_password").value = "";
@@ -2904,13 +2907,13 @@ async function saveNetwork(e) {
   const forceCountry = $("net_force_country").value;
   const routingIpType = $("net_routing_ip_type").value;
   
-  if (isNaN(proxyPort) || proxyPort < 1024 || proxyPort > 65535) {
+  if (!state?.docker_mode && (isNaN(proxyPort) || proxyPort < 1024 || proxyPort > 65535)) {
     errorDivEl.textContent = "代理出站端口范围必须在 1024 至 65535 之间";
     errorDivEl.style.display = "block";
     return;
   }
 
-  if (state && proxyPort === state.port) {
+  if (state && !state.docker_mode && proxyPort === state.port) {
     errorDivEl.textContent = "代理出站端口不能与网页管理端口相同";
     errorDivEl.style.display = "block";
     return;
@@ -2948,7 +2951,7 @@ async function saveNetwork(e) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        proxy_port: proxyPort,
+        ...(state?.docker_mode ? {} : { proxy_port: proxyPort }),
         proxy_auth_enabled: proxyAuthEnabled,
         proxy_username: proxyUsername,
         proxy_password: proxyPassword,

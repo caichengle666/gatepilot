@@ -62,6 +62,7 @@ type AppConfig struct {
 	ManualTestNodeLimit           int
 	InitialTestLimit              int
 	DisableBackground             bool
+	DockerMode                    bool
 }
 
 // UIConfig 是 Web 管理界面的运行时配置，持久化到磁盘。

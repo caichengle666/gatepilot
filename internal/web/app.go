@@ -40,7 +40,7 @@ type Application struct {
 	speedTests        sync.Mutex
 	proxyHealthMu     sync.Mutex
 	proxyHealthFails  int
-	failureRefreshMu  sync.Mutex
+	failureRefreshMu   sync.Mutex
 	lastFailureRefresh time.Time
 	maintenanceMu     sync.Mutex
 	maintenanceCancel context.CancelFunc
@@ -332,6 +332,7 @@ func statePayload(config store.AppConfig, ui store.UIConfig, state store.Runtime
 	result["password_set"] = ui.Password != ""
 	result["proxy_port"] = ui.ProxyPort
 	result["proxy_published_port"] = config.ProxyPublishedPort
+	result["docker_mode"] = config.DockerMode
 	result["proxy_auth_enabled"] = ui.ProxyAuthEnabled
 	result["proxy_username"] = ui.ProxyUsername
 	result["proxy_password_set"] = ui.ProxyPassword != ""
@@ -891,10 +892,16 @@ func (a *Application) updateSettings(writer http.ResponseWriter, request *http.R
 		if value, ok := payload["host"].(string); ok && strings.TrimSpace(value) != "" {
 			ui.Host = strings.TrimSpace(value)
 		}
+		if _, exists := payload["port"]; exists && a.Store.Config.DockerMode {
+			return errors.New("Docker 模式请使用 ml port 修改端口")
+		}
 		if value, ok := numberFromJSON(payload["port"]); ok && value > 0 && value <= 65535 {
 			ui.Port = value
 		}
 		if raw, exists := payload["proxy_port"]; exists {
+			if a.Store.Config.DockerMode {
+				return errors.New("Docker 模式请使用 ml port 修改端口")
+			}
 			value, ok := numberFromJSON(raw)
 			if !ok || value < 1024 || value > 65535 {
 				return errors.New("代理出站端口范围必须是 1024 至 65535")

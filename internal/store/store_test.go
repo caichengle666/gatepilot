@@ -45,6 +45,38 @@ func TestLoadAppConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestDockerModeUsesEnvironmentPortsOverPersistedUI(t *testing.T) {
+	config := LoadAppConfig()
+	config.DataDir = t.TempDir()
+	config.DockerMode = false
+	application, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := application.UpdateUI(func(ui *UIConfig) error {
+		ui.Port = 18878
+		ui.ProxyPort = 17928
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.SaveUI(); err != nil {
+		t.Fatal(err)
+	}
+
+	config.DockerMode = true
+	config.UIPort = 28878
+	config.ProxyPort = 27928
+	reloaded, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui, _, _ := reloaded.Snapshot()
+	if ui.Port != config.UIPort || ui.ProxyPort != config.ProxyPort {
+		t.Fatalf("Docker ports = %d/%d, want %d/%d", ui.Port, ui.ProxyPort, config.UIPort, config.ProxyPort)
+	}
+}
+
 func TestNewStoreResetsTransientRuntimeState(t *testing.T) {
 	config := LoadAppConfig()
 	config.DataDir = t.TempDir()
