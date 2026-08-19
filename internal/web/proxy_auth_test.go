@@ -2,11 +2,16 @@ package web
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/caichengle666/gatepilot/internal/store"
 	"github.com/caichengle666/gatepilot/internal/vpn"
@@ -83,5 +88,68 @@ func TestUpdateSettingsRejectsExternalHostWithoutProxyAuth(t *testing.T) {
 	_ = response.Body.Close()
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected bad request, got %s", response.Status)
+	}
+}
+
+func TestUpdateSettingsRejectsProxyPortInDockerMode(t *testing.T) {
+	app, application := newProxyAuthTestServer(t)
+	application.Config.DockerMode = true
+	server := httptest.NewServer(app)
+	defer server.Close()
+	client := loginProxyAuthTestServer(t, server.URL, application)
+	ui, _, _ := application.Snapshot()
+	payload, _ := json.Marshal(map[string]any{"proxy_port": 17928})
+	response, err := client.Post(server.URL+"/"+ui.SecretPath+"/api/update_settings", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected bad request, got %s", response.Status)
+	}
+	updated, _, _ := application.Snapshot()
+	if updated.ProxyPort != ui.ProxyPort {
+		t.Fatalf("proxy port changed to %d, want %d", updated.ProxyPort, ui.ProxyPort)
+	}
+}
+
+func TestProxyHTTPClientForPortSendsProxyAuthorization(t *testing.T) {
+	app, application := newProxyAuthTestServer(t)
+	expectedAuthorization := "Basic " + base64.StdEncoding.EncodeToString([]byte("proxy-user:proxy-pass"))
+	receivedAuthorization := ""
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		receivedAuthorization = request.Header.Get("Proxy-Authorization")
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer proxyServer.Close()
+
+	proxyURL, err := url.Parse(proxyServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, portText, err := net.SplitHostPort(proxyURL.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := application.UpdateUI(func(ui *store.UIConfig) error {
+		ui.ProxyAuthEnabled = true
+		ui.ProxyUsername = "proxy-user"
+		ui.ProxyPassword = "proxy-pass"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := app.proxyHTTPClientForPort(port, 5*time.Second).Get("http://example.invalid/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if receivedAuthorization != expectedAuthorization {
+		t.Fatalf("Proxy-Authorization = %q, want %q", receivedAuthorization, expectedAuthorization)
 	}
 }

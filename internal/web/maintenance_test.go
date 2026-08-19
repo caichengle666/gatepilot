@@ -28,6 +28,7 @@ func TestIsLocalProxyEnvironmentFailure(t *testing.T) {
 }
 
 func TestMaintainRefreshesNodesAfterAutomaticConnectionFailures(t *testing.T) {
+	t.Setenv("UPSTREAM_PROXY", "")
 	refreshes := 0
 	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		refreshes++

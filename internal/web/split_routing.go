@@ -7,8 +7,8 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/caichengle666/gatepilot/internal/proxy"
@@ -97,44 +97,35 @@ func (a *Application) dnsLeakCheck(writer http.ResponseWriter, request *http.Req
 	ctx, cancel := context.WithTimeout(request.Context(), 30*time.Second)
 	defer cancel()
 
-	proxyAddr := fmt.Sprintf("127.0.0.1:%d", ui.ProxyPort)
+	client := a.proxyHTTPClientForPort(ui.ProxyPort, 15*time.Second)
 	results := map[string]any{"ok": true}
 
 	// 1. 检测出口 IP
-	exitIP, exitErr := fetchThroughProxy(ctx, proxyAddr, "https://api.ip.sb/ip")
+	exitIP, exitErr := fetchWithClient(ctx, client, "https://api.ip.sb/ip")
 	results["exit_ip"] = exitIP
 	if exitErr != nil {
 		results["exit_ip_error"] = exitErr.Error()
 	}
 
 	// 2. DNS 泄漏检测：通过代理解析域名，检查 DNS 服务器归属
-	dnsServers, dnsErr := fetchThroughProxy(ctx, proxyAddr, "https://api.ip.sb/geoip")
+	dnsServers, dnsErr := fetchWithClient(ctx, client, "https://api.ip.sb/geoip")
 	results["geoip"] = dnsServers
 	if dnsErr != nil {
 		results["geoip_error"] = dnsErr.Error()
 	}
 
 	// 3. 检测 DNS 解析是否走 VPN（通过代理做 DNS 查询）
-	dnsLeak := a.checkDNSLeak(ctx, proxyAddr)
+	dnsLeak := a.checkDNSLeak(ctx, client)
 	results["dns_leak"] = dnsLeak
 
 	// 4. IPv6 泄漏检测
-	ipv6Leak := a.checkIPv6Leak(ctx, proxyAddr)
+	ipv6Leak := a.checkIPv6Leak(ctx, client)
 	results["ipv6_leak"] = ipv6Leak
 
 	writeJSONResponse(writer, http.StatusOK, results)
 }
 
-func fetchThroughProxy(ctx context.Context, proxyAddr, targetURL string) (string, error) {
-	proxyURL := "http://" + proxyAddr
-	parsedProxy, err := parseProxyURLSafe(proxyURL)
-	if err != nil {
-		return "", err
-	}
-	client := &http.Client{
-		Timeout: 15 * time.Second,
-		Transport: &http.Transport{Proxy: http.ProxyURL(parsedProxy)},
-	}
+func fetchWithClient(ctx context.Context, client *http.Client, targetURL string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
 		return "", err
@@ -144,6 +135,9 @@ func fetchThroughProxy(ctx context.Context, proxyAddr, targetURL string) (string
 		return "", err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", fmt.Errorf("HTTP %s", resp.Status)
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if err != nil {
 		return "", err
@@ -151,46 +145,119 @@ func fetchThroughProxy(ctx context.Context, proxyAddr, targetURL string) (string
 	return strings.TrimSpace(string(body)), nil
 }
 
-func parseProxyURLSafe(rawURL string) (*url.URL, error) {
-	return url.Parse(rawURL)
+type dnsLeakResult struct {
+	IP          string `json:"ip"`
+	CountryName string `json:"country_name"`
+	ASN         string `json:"asn"`
+	Type        string `json:"type"`
 }
 
 // checkDNSLeak 通过代理执行 DNS 查询，检测是否泄漏到本地 DNS。
-func (a *Application) checkDNSLeak(ctx context.Context, proxyAddr string) map[string]any {
-	result := map[string]any{"leaked": false, "details": ""}
-	// 通过代理访问 DNS 泄漏测试服务
-	body, err := fetchThroughProxy(ctx, proxyAddr, "https://dns.leak-test.com/json")
+func (a *Application) checkDNSLeak(ctx context.Context, client *http.Client) map[string]any {
+	result := map[string]any{"available": false, "leaked": false, "details": ""}
+	testID, err := fetchWithClient(ctx, client, "https://bash.ws/id")
 	if err != nil {
-		// 备用：通过代理做普通 DNS 解析对比
 		result["details"] = "DNS 泄漏测试服务不可达: " + err.Error()
-		result["leaked"] = false
 		return result
 	}
-	// 解析返回的 JSON，检查 DNS 服务器是否属于 VPN 出口国家
-	var dnsResult struct {
-		DNS []struct {
-			IP       string `json:"ip"`
-			Location string `json:"location"`
-		} `json:"dns"`
+	testID = strings.TrimSpace(testID)
+	if !validDNSLeakTestID(testID) {
+		result["details"] = "DNS 泄漏测试服务返回了无效测试编号"
+		return result
 	}
-	if json.Unmarshal([]byte(body), &dnsResult) == nil && len(dnsResult.DNS) > 0 {
-		servers := make([]string, 0, len(dnsResult.DNS))
-		for _, server := range dnsResult.DNS {
-			servers = append(servers, fmt.Sprintf("%s (%s)", server.IP, server.Location))
+
+	var waitGroup sync.WaitGroup
+	for index := 0; index < 10; index++ {
+		waitGroup.Add(1)
+		go func(index int) {
+			defer waitGroup.Done()
+			requestURL := fmt.Sprintf("https://%d.%s.bash.ws/", index, testID)
+			request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+			if requestErr != nil {
+				return
+			}
+			response, requestErr := client.Do(request)
+			if requestErr == nil {
+				_ = response.Body.Close()
+			}
+		}(index)
+	}
+	waitGroup.Wait()
+
+	body, err := fetchWithClient(ctx, client, "https://bash.ws/dnsleak/test/"+testID+"?json")
+	if err != nil {
+		result["details"] = "无法读取 DNS 泄漏测试结果: " + err.Error()
+		return result
+	}
+	var entries []dnsLeakResult
+	if err := json.Unmarshal([]byte(body), &entries); err != nil {
+		result["details"] = "无法解析 DNS 泄漏测试结果: " + err.Error()
+		return result
+	}
+	return analyzeDNSLeak(entries)
+}
+
+func validDNSLeakTestID(testID string) bool {
+	if len(testID) < 8 || len(testID) > 64 {
+		return false
+	}
+	for _, character := range testID {
+		if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') && (character < '0' || character > '9') {
+			return false
 		}
-		result["dns_servers"] = servers
-		result["details"] = "DNS 查询经过: " + strings.Join(servers, ", ")
+	}
+	return true
+}
+
+func analyzeDNSLeak(entries []dnsLeakResult) map[string]any {
+	result := map[string]any{"available": false, "leaked": false, "details": ""}
+	exitASN := ""
+	for _, entry := range entries {
+		if entry.Type == "ip" {
+			exitASN = strings.TrimSpace(entry.ASN)
+			break
+		}
+	}
+	servers := make([]string, 0)
+	leaked := false
+	comparable := false
+	for _, entry := range entries {
+		if entry.Type != "dns" {
+			continue
+		}
+		label := entry.IP
+		if entry.CountryName != "" {
+			label += " (" + entry.CountryName + ")"
+		}
+		servers = append(servers, label)
+		if exitASN != "" && strings.TrimSpace(entry.ASN) != "" {
+			comparable = true
+			if !strings.EqualFold(strings.TrimSpace(entry.ASN), exitASN) {
+				leaked = true
+			}
+		}
+	}
+	if len(servers) == 0 {
+		result["details"] = "未检测到 DNS 解析器，无法判断是否泄漏"
+		return result
+	}
+	result["available"] = comparable
+	result["leaked"] = leaked
+	result["dns_servers"] = servers
+	if !comparable {
+		result["details"] = "检测到 DNS 解析器，但缺少 ASN 信息，无法判断是否泄漏: " + strings.Join(servers, ", ")
+	} else if leaked {
+		result["details"] = "DNS 解析器与 VPN 出口网络不一致，可能存在泄漏: " + strings.Join(servers, ", ")
 	} else {
-		result["details"] = "无法解析 DNS 泄漏测试结果"
+		result["details"] = "DNS 解析器与 VPN 出口网络一致: " + strings.Join(servers, ", ")
 	}
 	return result
 }
 
 // checkIPv6Leak 检测 IPv6 是否绕过 VPN。
-func (a *Application) checkIPv6Leak(ctx context.Context, proxyAddr string) map[string]any {
+func (a *Application) checkIPv6Leak(ctx context.Context, client *http.Client) map[string]any {
 	result := map[string]any{"leaked": false, "details": "IPv6 流量已通过代理隧道"}
-	// 尝试通过代理获取 IPv6 地址
-	body, err := fetchThroughProxy(ctx, proxyAddr, "https://v6.ident.me")
+	body, err := fetchWithClient(ctx, client, "https://v6.ident.me")
 	if err != nil {
 		result["details"] = "IPv6 检测不可用（可能节点不支持 IPv6）"
 		return result
