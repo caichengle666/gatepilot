@@ -445,9 +445,18 @@ configure_initial_settings() {
 
 if [ -d "${INSTALL_DIR}/.git" ]; then
     if [ ! -f "${INSTALL_DIR}/.local_dev" ]; then
+        if ! git -C "$INSTALL_DIR" diff --quiet || ! git -C "$INSTALL_DIR" diff --cached --quiet; then
+            echo -e "${RED}检测到 ${INSTALL_DIR} 存在未提交的本地修改，已停止自动更新。${PLAIN}"
+            echo -e "${YELLOW}请先处理这些修改；若要保留本地开发版本，请创建 ${INSTALL_DIR}/.local_dev 后重新运行安装脚本。${PLAIN}"
+            exit 1
+        fi
         git -C "$INSTALL_DIR" fetch origin "$DEPLOY_BRANCH"
         git -C "$INSTALL_DIR" checkout "$DEPLOY_BRANCH"
-        git -C "$INSTALL_DIR" pull --ff-only origin "$DEPLOY_BRANCH"
+        if ! git -C "$INSTALL_DIR" pull --ff-only origin "$DEPLOY_BRANCH"; then
+            echo -e "${RED}本地分支无法快进到 origin/${DEPLOY_BRANCH}，已停止安装。${PLAIN}"
+            echo -e "${YELLOW}请先检查本地提交，或创建 ${INSTALL_DIR}/.local_dev 使用当前代码。${PLAIN}"
+            exit 1
+        fi
     fi
 else
     git clone --branch "$DEPLOY_BRANCH" "$GITHUB_URL" "$INSTALL_DIR"
