@@ -144,8 +144,26 @@ ensure_docker_runtime() {
         rc-update add docker default >/dev/null 2>&1 || true
         rc-service docker start
     fi
+    if ! docker info >/dev/null 2>&1; then
+        echo -e "${RED}Docker 守护进程未启动或当前用户无法访问 Docker。请检查 docker 服务后重试。${PLAIN}"
+        exit 1
+    fi
     if ! compose version >/dev/null 2>&1; then
         echo -e "${RED}未检测到 Docker Compose，请安装 Compose 插件后重试。${PLAIN}"
+        exit 1
+    fi
+}
+
+ensure_docker_tun() {
+    if [ ! -c /dev/net/tun ] && command -v modprobe >/dev/null 2>&1; then
+        modprobe tun >/dev/null 2>&1 || true
+    fi
+    if [ ! -c /dev/net/tun ]; then
+        echo -e "${RED}未检测到 /dev/net/tun。当前主机或虚拟化平台未提供 TUN 设备，Docker 模式无法启动 OpenVPN。${PLAIN}"
+        exit 1
+    fi
+    if [ ! -r /dev/net/tun ] || [ ! -w /dev/net/tun ]; then
+        echo -e "${RED}/dev/net/tun 权限不足。请确认 root 可读写该设备后重试。${PLAIN}"
         exit 1
     fi
 }
@@ -235,6 +253,24 @@ valid_port() {
     [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
 }
 
+valid_tunnel_proxy_port() {
+    valid_port "$1" && [ "$1" -le 65527 ]
+}
+
+wait_for_container_health() {
+    local attempt health status
+    for attempt in $(seq 1 "${GATEPILOT_HEALTH_ATTEMPTS:-24}"); do
+        health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' gatepilot 2>/dev/null || true)
+        status=$(docker inspect -f '{{.State.Status}}' gatepilot 2>/dev/null || true)
+        [ "$health" = "healthy" ] && return 0
+        case "$status" in
+            exited|dead|restarting) return 1 ;;
+        esac
+        sleep "${GATEPILOT_HEALTH_INTERVAL:-5}"
+    done
+    return 1
+}
+
 wait_for_auth_file() {
     local attempt
     for attempt in $(seq 1 30); do
@@ -317,8 +353,8 @@ configure_initial_settings() {
 
     read_prompt -r -p "本地 HTTP/SOCKS5 代理端口 [${current_proxy_port}]: " proxy_port
     proxy_port=${proxy_port:-$current_proxy_port}
-    while ! valid_port "$proxy_port" || [ "$proxy_port" = "$web_port" ]; do
-        read_prompt -r -p "端口无效或与 Web 端口冲突，请重新输入代理端口: " proxy_port
+    while ! valid_tunnel_proxy_port "$proxy_port" || [ "$web_port" -ge "$proxy_port" ] && [ "$web_port" -le "$((proxy_port + 8))" ]; do
+        read_prompt -r -p "代理端口需为 1-65527，且其后 8 个附加隧道端口不能与 Web 端口冲突: " proxy_port
     done
 
     proxy_bind="127.0.0.1"
@@ -419,6 +455,7 @@ fi
 
 if [ "$INSTALL_MODE" = "docker" ]; then
     ensure_docker_runtime
+    ensure_docker_tun
     if command -v systemctl >/dev/null 2>&1; then
         systemctl disable --now gatepilot.service >/dev/null 2>&1 || true
     elif command -v rc-service >/dev/null 2>&1; then
@@ -427,9 +464,18 @@ if [ "$INSTALL_MODE" = "docker" ]; then
     fi
     : > "$INSTALL_DIR/.docker_install"
     cd "$INSTALL_DIR"
-    compose pull
-    compose up -d --remove-orphans
+    if ! compose config -q; then
+        echo -e "${RED}Docker Compose 配置无效，请检查 ${INSTALL_DIR}/compose.yml 和 ${INSTALL_DIR}/.env。${PLAIN}"
+        exit 1
+    fi
+    compose pull gatepilot
+    compose up -d --remove-orphans gatepilot
     configure_docker_firewall
+    if ! wait_for_container_health; then
+        echo -e "${RED}GatePilot 容器健康检查失败，容器日志如下：${PLAIN}"
+        docker logs --tail 100 gatepilot 2>&1 || true
+        exit 1
+    fi
 else
     if [ -f "$INSTALL_DIR/.docker_install" ]; then
         remove_gatepilot_firewall

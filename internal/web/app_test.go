@@ -476,7 +476,7 @@ func TestIndexShowsNetworkSettingsAndNodeLatency(t *testing.T) {
 		"单次最多读取 20 MB", "节点延迟", "${latencyText}${testBtn}",
 		"openvpn_warning", "state.openvpn_ok === false",
 		"dashboard_traffic", "./api/traffic", "实时 ↓", "官方带宽",
-		"UDP 连接", "JSON.stringify({id, protocol})", "min-width: 1180px", "flex-wrap: wrap",
+		"UDP 连接", "JSON.stringify({id, protocol})", "min-width: 1650px", "flex-wrap: wrap",
 	} {
 		if !strings.Contains(indexHTML, expected) {
 			t.Fatalf("index is missing %q", expected)

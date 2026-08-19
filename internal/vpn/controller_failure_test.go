@@ -98,6 +98,18 @@ func TestOpenVPNRouteArguments(t *testing.T) {
 	}
 }
 
+func TestMainTunnelRejectsPushedDefaultRoute(t *testing.T) {
+	if !mainRouteNopull {
+		t.Fatal("main tunnel must reject pushed redirect-gateway routes")
+	}
+	arguments := strings.Join(openVPNRouteArguments(mainRouteNopull), " ")
+	for _, argument := range []string{"--pull-filter ignore redirect-gateway", "--route-nopull"} {
+		if !strings.Contains(arguments, argument) {
+			t.Fatalf("main tunnel route arguments missing %q: %s", argument, arguments)
+		}
+	}
+}
+
 func TestSocks5RequiresAuth(t *testing.T) {
 	tests := []struct {
 		name  string

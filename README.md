@@ -113,6 +113,8 @@ docker compose up -d
 docker compose logs -f gatepilot
 ```
 
+一键脚本在 Docker 模式下会自动安装并启动 Docker/Compose、检查 `/dev/net/tun`、生成 `.env` 和 `data/ui_auth.json`、拉取 GitHub Container Registry 镜像、启动容器并等待健康检查。健康检查失败时会保留容器并输出最近日志；常见原因是 VPS 未启用 TUN，需在服务商控制台开启后重新运行安装脚本。
+
 默认发布 Web 端口 `8787`，主代理和附加隧道代理仅绑定宿主机 `127.0.0.1:7928–7936`。Docker 可通过 `GATEPILOT_PROXY_PORT`、`GATEPILOT_TUNNEL_PROXY_PORT_START` 和 `GATEPILOT_TUNNEL_PROXY_PORT_END` 将宿主机端口映射到容器内的 `7928–7936`；Web 会显示实际发布端口。安装向导或 `ml proxy` 可将代理发布到公网；公网模式强制启用用户名密码认证。持久化数据和 Geo 规则文件保存在当前目录的 `data/`，Compose 发布配置保存在 `.env`。
 
 镜像内置 Web 健康检查。`ml update-image` 会等待新容器进入 healthy 状态；检查失败时自动恢复更新前镜像并输出故障日志。

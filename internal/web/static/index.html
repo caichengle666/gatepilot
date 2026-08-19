@@ -397,7 +397,7 @@
 
     table {
       width: 100%;
-      min-width: 1180px;
+      min-width: 1650px;
       border-collapse: collapse;
       text-align: left;
       table-layout: fixed;
@@ -407,6 +407,7 @@
       padding: 14px 20px;
       border-bottom: 1px solid var(--border-color);
       font-size: 14px;
+      box-sizing: border-box;
     }
 
     th {
@@ -417,8 +418,6 @@
       letter-spacing: 0.8px;
       color: var(--text-secondary);
       white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
     }
 
     tr {
@@ -570,6 +569,108 @@
       cursor: not-allowed;
     }
 
+    .gateway-modal-content {
+      width: min(720px, calc(100vw - 32px)) !important;
+      max-width: 720px !important;
+      max-height: calc(100vh - 32px);
+      padding: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .gateway-modal-header,
+    .gateway-modal-footer {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 24px;
+    }
+
+    .gateway-modal-header {
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .gateway-modal-footer {
+      justify-content: flex-end;
+      border-top: 1px solid var(--border-color);
+      background: rgba(16, 23, 39, 0.96);
+    }
+
+    .gateway-modal-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 20px 24px;
+    }
+
+    .gateway-service {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 6px 16px;
+      align-items: center;
+      padding: 12px 16px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+    }
+
+    .gateway-service-name {
+      min-width: 0;
+      font-size: 14px;
+      color: var(--text-primary);
+    }
+
+    .gateway-service-details {
+      min-width: 0;
+      color: var(--text-secondary);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .gateway-service-status {
+      grid-column: 2;
+      grid-row: 1 / span 2;
+    }
+
+    .gateway-service-error {
+      grid-column: 1 / -1;
+      margin-top: 4px;
+      padding: 6px 10px;
+      color: var(--danger);
+      font-size: 12px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+      background: rgba(244,63,94,0.08);
+      border: 1px solid rgba(244,63,94,0.15);
+      border-radius: 6px;
+    }
+
+    .gateway-proxy-summary {
+      display: grid;
+      grid-template-columns: max-content minmax(0, 1fr);
+      gap: 10px 16px;
+      align-items: center;
+      margin-bottom: 12px;
+      padding: 12px;
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 8px;
+    }
+
+    .gateway-proxy-endpoint {
+      min-width: 0;
+      text-align: right;
+      overflow-wrap: anywhere;
+    }
+
+    .gateway-proxy-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      justify-content: flex-end;
+    }
+
     .mono {
       font-family: 'JetBrains Mono', Consolas, monospace;
       font-size: 13px;
@@ -629,6 +730,27 @@
       }
       .active-card button {
         width: 100%;
+      }
+      .gateway-modal-content {
+        width: 100% !important;
+        max-height: 100%;
+        height: 100%;
+        border-radius: 0;
+      }
+      .gateway-modal-header,
+      .gateway-modal-body,
+      .gateway-modal-footer {
+        padding-left: 16px;
+        padding-right: 16px;
+      }
+      .gateway-proxy-summary {
+        grid-template-columns: 1fr;
+      }
+      .gateway-proxy-endpoint {
+        text-align: left;
+      }
+      .gateway-proxy-actions button {
+        flex: 1 1 160px;
       }
     }
     
@@ -1021,17 +1143,28 @@
   <div class="table-wrapper">
     <div class="table-container">
       <table>
+        <colgroup>
+          <col style="width: 96px;">
+          <col style="width: 230px;">
+          <col style="width: 220px;">
+          <col style="width: 250px;">
+          <col style="width: 84px;">
+          <col style="width: 145px;">
+          <col style="width: 120px;">
+          <col style="width: 175px;">
+          <col style="width: 330px;">
+        </colgroup>
         <thead>
           <tr>
-            <th style="width: 90px;">状态</th>
-            <th style="width: 220px;">IP 地址 : 端口</th>
+            <th>状态</th>
+            <th>IP 地址 : 端口</th>
             <th>物理位置</th>
             <th>运营主体 / ISP</th>
-            <th style="width: 80px;">协议</th>
-            <th style="width: 120px;">官方带宽</th>
-            <th style="width: 110px;">IP 类型</th>
-            <th style="width: 150px;">节点延迟</th>
-            <th style="width: 260px;">操作</th>
+            <th>协议</th>
+            <th>官方带宽</th>
+            <th>IP 类型</th>
+            <th>节点延迟</th>
+            <th>操作</th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
@@ -1294,8 +1427,8 @@
 
   <!-- Gateway Modal (网关自检与代理测试) -->
   <div id="gateway_modal" class="modal">
-    <div class="modal-content" style="max-width: 600px; width: 90%;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+    <div class="modal-content gateway-modal-content">
+      <div class="gateway-modal-header">
         <h3 style="margin: 0; font-size: 18px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
           <svg xmlns="http://www.w3.org/2000/svg" style="width:20px; height:20px; color: var(--primary);" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
           网关设置与自检
@@ -1305,6 +1438,7 @@
         </button>
       </div>
 
+      <div class="gateway-modal-body">
       <!-- 服务列表 -->
       <div id="gateway_services_list" style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px;">
         <div style="text-align: center; color: var(--text-secondary); padding: 20px 0;">
@@ -1328,18 +1462,18 @@
           </div>
         </div>
         
-        <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(0, 0, 0, 0.2); border-radius: 8px; padding: 12px; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
+        <div class="gateway-proxy-summary">
           <div style="font-size: 13px; color: var(--text-secondary);">
             测试状态: <span id="proxy_status_badge" class="badge not_checked" style="margin-left: 4px;">未检测</span>
           </div>
-          <div style="font-size: 13px; color: var(--text-secondary); text-align: right;">
+          <div class="gateway-proxy-endpoint" style="font-size: 13px; color: var(--text-secondary);">
             出口 IP: <span id="proxy_ip_val" class="mono" style="font-weight: 600; color: var(--text-primary);">-</span> 
             <span id="proxy_latency_val" style="margin-left: 6px;"></span>
             <span id="proxy_speed_val" style="margin-left: 8px; font-weight: 700; color: var(--success);">- Mbps</span>
           </div>
         </div>
 
-        <div style="display: flex; gap: 12px; justify-content: flex-end;">
+        <div class="gateway-proxy-actions">
           <button id="btn_test_proxy" class="btn-primary" style="height: 36px; padding: 0 16px; font-size: 13px;">
             <svg xmlns="http://www.w3.org/2000/svg" style="width:14px; height:14px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
             开始检测
@@ -1348,7 +1482,8 @@
         </div>
       </div>
       
-      <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
+      </div>
+      <div class="gateway-modal-footer">
         <button type="button" onclick="closeGatewayModal()" style="height: 38px; padding: 0 20px; font-weight: 600; border-radius: 8px; border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary); cursor: pointer;">关闭</button>
       </div>
     </div>
@@ -1852,11 +1987,11 @@ function render(){
       return `<tr ${rowClass}>
         <td><span class="badge ${badgeClass}">${badgeText}</span></td>
         <td class="mono" style="white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis;" title="${esc(n.ip||n.remote_host)}:${n.remote_port||""}">${esc(n.ip||n.remote_host)}:${n.remote_port||""}</td>
-        <td style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(displayLocation)}">${esc(displayLocation)}</td>
-        <td style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(n.owner||n.as_name||"-")}">${esc(n.owner||n.as_name||"-")}</td>
+        <td style="white-space: normal; overflow-wrap: anywhere; line-height: 1.35;" title="${esc(displayLocation)}">${esc(displayLocation)}</td>
+        <td style="white-space: normal; overflow-wrap: anywhere; line-height: 1.35;" title="${esc(n.owner||n.as_name||"-")}">${esc(n.owner||n.as_name||"-")}</td>
         <td><strong style="color: ${protocolColor};">${esc(protocol)}</strong></td>
         <td class="mono" style="white-space: nowrap; font-variant-numeric: tabular-nums;" title="VPNGate 官方 CSV 上报值，仅供参考">${speed(n.speed)}</td>
-        <td style="white-space: nowrap; max-width: 110px; overflow: hidden; text-overflow: ellipsis;" title="${esc(translateIpType(n.ip_type))}">${esc(translateIpType(n.ip_type))}</td>
+        <td style="white-space: normal; overflow-wrap: anywhere; line-height: 1.35;" title="${esc(translateIpType(n.ip_type))}">${esc(translateIpType(n.ip_type))}</td>
         <td><div class="table-actions">${latencyText}${testBtn}</div></td>
         <td>
           <div class="table-actions">
@@ -3051,14 +3186,12 @@ function renderGatewayServices(services) {
     const statusPulse = s.status === "running" ? '<span class="badge-pulse"></span>' : '';
     
     html += `
-      <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 10px; padding: 12px 16px; display: flex; flex-direction: column; gap: 6px;">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-          <strong style="font-size: 14px; color: var(--text-primary);">${esc(s.name)}</strong>
-          <span class="badge ${badgeClass}">${statusPulse}${statusText}</span>
-        </div>
-        <div style="font-size: 12px; color: var(--text-secondary);">${esc(s.details || "-")}</div>
+      <div class="gateway-service">
+        <strong class="gateway-service-name">${esc(s.name)}</strong>
+        <span class="badge ${badgeClass} gateway-service-status">${statusPulse}${statusText}</span>
+        <div class="gateway-service-details">${esc(s.details || "-")}</div>
         ${s.error ? `
-          <div style="font-size: 12px; color: var(--danger); background: rgba(244,63,94,0.08); border: 1px solid rgba(244,63,94,0.15); border-radius: 6px; padding: 6px 10px; margin-top: 4px; line-height: 1.4;">
+          <div class="gateway-service-error">
             ⚠️ 诊断原因: ${esc(s.error)}
           </div>
         ` : ''}

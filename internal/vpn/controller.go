@@ -34,7 +34,10 @@ type Controller struct {
 	TunnelStopped func(TunnelStatus, bool)
 }
 
-const maxAdditionalTunnels = 8
+const (
+	maxAdditionalTunnels = 8
+	mainRouteNopull       = true
+)
 
 // TunnelStatus 描述一条 Linux 附加 VPN 隧道及其独立代理入口。
 type TunnelStatus struct {
@@ -472,7 +475,7 @@ func (c *Controller) ConnectContext(ctx context.Context, nodeID string) (string,
 		state.LastCheckMessage = "正在连接节点 " + candidate.ID
 		state.ActiveNodeLatency = "测试中..."
 	})
-	run, err := c.runUntilReady(ctx, candidate, "tun0", c.application.Config.OpenVPNTimeout, false)
+	run, err := c.runUntilReady(ctx, candidate, "tun0", c.application.Config.OpenVPNTimeout, mainRouteNopull)
 	if err != nil {
 		if shouldBlacklistOpenVPNFailure(err) {
 			c.application.MarkBlacklisted(candidate, err.Error())

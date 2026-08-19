@@ -109,11 +109,22 @@ if grep -E '^[[:space:]]+read ' "$ROOT_DIR/install.sh" | grep -Fv 'read "$@" <&"
 fi
 grep -F 'exec 3</dev/tty' "$ROOT_DIR/install.sh" >/dev/null
 grep -F 'read "$@" <&"$PROMPT_FD"' "$ROOT_DIR/install.sh" >/dev/null
+grep -F 'ensure_docker_tun()' "$ROOT_DIR/install.sh" >/dev/null
+grep -F 'compose config -q' "$ROOT_DIR/install.sh" >/dev/null
+grep -F 'wait_for_container_health' "$ROOT_DIR/install.sh" >/dev/null
+grep -F 'valid_tunnel_proxy_port' "$ROOT_DIR/install.sh" >/dev/null
 eval "$(sed -n '/^read_prompt()/,/^}/p' "$ROOT_DIR/install.sh")"
+eval "$(sed -n '/^valid_port()/,/^}/p' "$ROOT_DIR/install.sh")"
+eval "$(sed -n '/^valid_tunnel_proxy_port()/,/^}/p' "$ROOT_DIR/install.sh")"
 exec 3<<<"docker"
 PROMPT_FD=3
 read_prompt -r prompt_value
 [ "$prompt_value" = "docker" ]
+valid_tunnel_proxy_port 65527
+if valid_tunnel_proxy_port 65528; then
+    echo "附加隧道代理端口上限校验失效"
+    exit 1
+fi
 
 UPDATE_LOG="$TEST_DIR/update.log"
 git() {
@@ -142,6 +153,17 @@ docker() {
         "cp gatepilot:"*) printf 'geo-data\n' > "${*: -1}" ;;
     esac
 }
+
+eval "$(sed -n '/^wait_for_container_health()/,/^}/p' "$ROOT_DIR/install.sh")"
+export GATEPILOT_HEALTH_ATTEMPTS=1
+export GATEPILOT_HEALTH_INTERVAL=0
+wait_for_container_health
+MOCK_HEALTH="unhealthy"
+if wait_for_container_health; then
+    echo "不健康容器不应通过安装阶段健康检查"
+    exit 1
+fi
+MOCK_HEALTH="healthy"
 
 update_scripts
 grep -F "git -C $TEST_DIR pull --ff-only" "$UPDATE_LOG" >/dev/null

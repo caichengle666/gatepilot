@@ -13,6 +13,7 @@ import (
 
 func setupPolicyRouting(device string) {
 	setupDevicePolicyRouting(device, 100)
+	cleanupRedirectGatewayRoutes(device)
 }
 
 func setupDevicePolicyRouting(device string, table int) {
@@ -89,6 +90,37 @@ func waitForDeviceReady(device string, timeout time.Duration) error {
 }
 func cleanupPolicyRouting() {
 	cleanupDevicePolicyRouting("tun0", 100)
+	cleanupRedirectGatewayRoutes("tun0")
+}
+
+func cleanupRedirectGatewayRoutes(device string) {
+	if !strings.HasPrefix(device, "tun") {
+		return
+	}
+	out, err := exec.Command("ip", "route", "show", "table", "main").Output()
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		destination, ok := redirectGatewayRoute(line, device)
+		if !ok {
+			continue
+		}
+		_ = exec.Command("ip", "route", "del", destination, "dev", device).Run()
+	}
+}
+
+func redirectGatewayRoute(line, device string) (string, bool) {
+	fields := strings.Fields(line)
+	if len(fields) < 2 || (fields[0] != "0.0.0.0/1" && fields[0] != "128.0.0.0/1") {
+		return "", false
+	}
+	for index := 1; index+1 < len(fields); index++ {
+		if fields[index] == "dev" && fields[index+1] == device {
+			return fields[0], true
+		}
+	}
+	return "", false
 }
 
 func cleanupDevicePolicyRouting(device string, table int) {
