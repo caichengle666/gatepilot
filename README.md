@@ -78,11 +78,96 @@ GatePilot 不会修改 Windows 全局默认路由；只有使用 GatePilot 本�
 
 ## 一键安装
 
+一键脚本适合全新 Linux VPS。它会自动完成 Docker 环境准备、项目配置和容器启动，用户只需要在向导中输入配置，不需要手动编写 `compose.yml` 或执行 `docker run`。
+
+### Docker 一键安装（推荐）
+
+使用 root 用户执行：
+
 ```bash
+sudo -i
 bash <(curl -Ls https://raw.githubusercontent.com/caichengle666/gatepilot/main/install.sh)
 ```
 
-首次在交互终端安装时会先选择原生安装或 Docker Compose 安装，再启动配置向导，可设置管理账号密码、Web 绑定地址、Web/代理端口、安全路径、代理认证和前置代理。用于自动化部署时可通过 `GATEPILOT_INSTALL_MODE=native|docker` 指定模式，并设置 `GATEPILOT_SKIP_WIZARD=1` 跳过向导、使用随机凭据。
+脚本启动后选择：
+
+```text
+1) 原生安装
+2) Docker Compose 安装
+```
+
+选择 `2` 后，脚本会自动执行以下步骤：
+
+1. 检测 Linux 发行版并安装 `curl`、`git`、`jq` 和 CA 证书。
+2. 安装并启动 Docker；自动检测 `docker compose` 或兼容的 `docker-compose`。
+3. 检查宿主机是否提供 `/dev/net/tun`。没有 TUN 的 VPS 无法运行 OpenVPN 容器，脚本会停止并给出提示。
+4. 从 GitHub 拉取项目文件到 `/opt/gatepilot`。
+5. 生成 Docker Compose 的本地 `.env` 配置。
+6. 从 GitHub Container Registry 拉取预编译镜像 `ghcr.io/caichengle666/gatepilot:latest`。
+7. 创建并启动 `gatepilot` 容器，挂载 `/opt/gatepilot/data` 持久化数据。
+8. 等待容器健康检查通过，失败时保留容器并打印最近日志。
+9. 启动首次安装向导并输出最终管理地址、用户名和密码。
+
+首次安装向导会依次询问：
+
+- Web 管理用户名和密码；密码留空则保留程序生成的随机密码。
+- Web 监听范围：仅本机 `127.0.0.1` 或公网 `0.0.0.0`。
+- Web 管理端口，默认 `8787`。
+- 主 HTTP/SOCKS5 代理端口，默认 `7928`。
+- 代理监听范围：仅本机，或公网开放。
+- Web 登录安全路径；只能使用英文字母和数字。
+- 代理认证账号密码；公网代理会强制启用认证。
+- VPNGate API 和 TCP OpenVPN 使用的可选前置代理，例如 `socks5://127.0.0.1:1080`。
+
+配置完成后，浏览器打开脚本输出的管理地址即可使用。默认情况下，Web 可以公网访问，但代理只绑定宿主机 `127.0.0.1`；如果选择公网代理，务必设置强密码并配置 VPS 防火墙。
+
+### 一键安装生成的文件
+
+```text
+/opt/gatepilot/
+├── .env                    # Docker 端口和绑定地址
+├── .docker_install         # 标记当前使用 Docker 模式
+├── compose.yml             # 容器编排配置
+├── data/                   # 节点、账号、状态和 Geo 数据
+└── scripts/ml.sh           # 管理命令
+```
+
+其中 `data/` 和 `.env` 会在重复执行安装脚本时保留，已有账号密码和端口不会被无故覆盖。安装脚本可以重复运行，用于修复 Docker 服务、更新项目配置或重新拉取镜像。
+
+### 安装后的常用命令
+
+```bash
+ml status          # 查看容器和 OpenVPN 状态
+ml info            # 查看管理地址、端口和运行信息
+ml logs            # 查看容器日志
+ml restart         # 重启容器
+ml update-image    # 拉取最新镜像并重建，失败自动恢复旧镜像
+ml update-script   # 只更新管理脚本
+ml update          # 更新脚本并更新运行程序
+ml uninstall       # 卸载容器和服务
+```
+
+如果安装失败，先执行：
+
+```bash
+cd /opt/gatepilot
+docker compose ps
+docker compose logs --tail=100 gatepilot
+```
+
+常见原因是 VPS 没有开启 TUN、Docker 服务未启动、端口已被占用，或云厂商安全组没有放行你选择的 Web/代理端口。
+
+### 自动化安装
+
+无交互环境可以指定 Docker 模式并跳过配置向导。此时程序使用随机凭据启动，必须通过日志或 `ml info` 获取管理信息后再修改配置：
+
+```bash
+GATEPILOT_INSTALL_MODE=docker \
+GATEPILOT_SKIP_WIZARD=1 \
+bash <(curl -Ls https://raw.githubusercontent.com/caichengle666/gatepilot/main/install.sh)
+```
+
+首次在交互终端安装时也可以选择 `1` 使用原生 systemd/OpenRC 模式。原生模式不会安装 Docker，而是安装系统 OpenVPN、编译 Go 程序并注册服务。
 
 安装目录为 `/opt/gatepilot`。原生模式使用 systemd/OpenRC 服务，Docker 模式使用 `compose.yml` 和 `data/` 持久化目录；两种模式安装后都可使用：
 
@@ -113,7 +198,7 @@ docker compose up -d
 docker compose logs -f gatepilot
 ```
 
-一键脚本在 Docker 模式下会自动安装并启动 Docker/Compose、检查 `/dev/net/tun`、生成 `.env` 和 `data/ui_auth.json`、拉取 GitHub Container Registry 镜像、启动容器并等待健康检查。健康检查失败时会保留容器并输出最近日志；常见原因是 VPS 未启用 TUN，需在服务商控制台开启后重新运行安装脚本。
+一键脚本在 Docker 模式下会自动安装并启动 Docker/Compose、检查 `/dev/net/tun`、生成 `.env` 和 `data/ui_auth.json`、拉取 GitHub Container Registry 镜像、启动容器并等待健康检查。健康检查失败时会保留容器并输出最近日志；常见原因是 VPS 未启用 TUN，需在服务商控制台开启后重新运行安装脚本。手动执行 Compose 时，以上依赖和配置需要自行准备。
 
 默认发布 Web 端口 `8787`，主代理和附加隧道代理仅绑定宿主机 `127.0.0.1:7928–7936`。Docker 可通过 `GATEPILOT_PROXY_PORT`、`GATEPILOT_TUNNEL_PROXY_PORT_START` 和 `GATEPILOT_TUNNEL_PROXY_PORT_END` 将宿主机端口映射到容器内的 `7928–7936`；Web 会显示实际发布端口。安装向导或 `ml proxy` 可将代理发布到公网；公网模式强制启用用户名密码认证。持久化数据和 Geo 规则文件保存在当前目录的 `data/`，Compose 发布配置保存在 `.env`。
 
