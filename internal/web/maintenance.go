@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	maxSpeedTestBytes       int64 = 20_000_000
-	maxProxyHealthFailures        = 3
-	failureRefreshBackoff         = time.Minute
+	maxSpeedTestBytes      int64 = 20_000_000
+	maxProxyHealthFailures       = 3
+	failureRefreshBackoff        = time.Minute
+	tunnelRecoveryInterval       = 5 * time.Minute
 )
 
 type speedTestResult struct {
@@ -46,6 +47,7 @@ func (a *Application) tunnelHealthChecker() {
 		for _, status := range a.VPN.Tunnels() {
 			go a.checkTunnelHealth(status)
 		}
+		a.retryTunnelRecovery()
 		time.Sleep(20 * time.Second)
 	}
 }

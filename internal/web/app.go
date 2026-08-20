@@ -25,34 +25,41 @@ import (
 
 // Application 是 Web 管理服务。
 type Application struct {
-	Store             *store.Store
-	VPN               *vpn.Controller
-	Proxy             *proxy.Server
-	startedAt         time.Time
-	server            *http.Server
-	serverMu          sync.Mutex
-	sessionsMu        sync.Mutex
-	sessions          map[string]time.Time
-	loginMu           sync.Mutex
-	logins            map[string]loginFailure
-	Operations        operationLock
-	autoSwitchMu      sync.Mutex
-	speedTests        sync.Mutex
-	proxyHealthMu     sync.Mutex
-	proxyHealthFails  int
+	Store              *store.Store
+	VPN                *vpn.Controller
+	Proxy              *proxy.Server
+	startedAt          time.Time
+	server             *http.Server
+	serverMu           sync.Mutex
+	sessionsMu         sync.Mutex
+	sessions           map[string]time.Time
+	loginMu            sync.Mutex
+	logins             map[string]loginFailure
+	Operations         operationLock
+	autoSwitchMu       sync.Mutex
+	speedTests         sync.Mutex
+	proxyHealthMu      sync.Mutex
+	proxyHealthFails   int
 	failureRefreshMu   sync.Mutex
 	lastFailureRefresh time.Time
-	maintenanceMu     sync.Mutex
-	maintenanceCancel context.CancelFunc
-	tunnelProxyMu     sync.Mutex
-	tunnelProxies     map[string]*proxy.Server
-	tunnelFailoverMu  sync.Mutex
-	tunnelFailovers   map[string]bool
+	maintenanceMu      sync.Mutex
+	maintenanceCancel  context.CancelFunc
+	tunnelProxyMu      sync.Mutex
+	tunnelProxies      map[string]*proxy.Server
+	tunnelFailoverMu   sync.Mutex
+	tunnelFailovers    map[string]bool
+	tunnelRecoveryMu   sync.Mutex
+	tunnelRecovery     map[string]tunnelRecovery
 }
 
 type loginFailure struct {
 	count        int
 	blockedUntil time.Time
+}
+
+type tunnelRecovery struct {
+	proxyPort int
+	nextTry   time.Time
 }
 
 type operationLock struct {
@@ -113,7 +120,7 @@ func (a *Application) cancelMaintenance() {
 func NewApplication(application *store.Store, vpnCtrl *vpn.Controller) *Application {
 	webApp := &Application{
 		Store: application, VPN: vpnCtrl, startedAt: time.Now(),
-		sessions: map[string]time.Time{}, logins: map[string]loginFailure{}, tunnelProxies: map[string]*proxy.Server{}, tunnelFailovers: map[string]bool{},
+		sessions: map[string]time.Time{}, logins: map[string]loginFailure{}, tunnelProxies: map[string]*proxy.Server{}, tunnelFailovers: map[string]bool{}, tunnelRecovery: map[string]tunnelRecovery{},
 	}
 	vpnCtrl.TunnelStopped = webApp.stopTunnelProxy
 	return webApp
@@ -639,29 +646,107 @@ func (a *Application) failoverTunnel(previous vpn.TunnelStatus, reason string) {
 			return
 		}
 	}
+	status, err := a.pickAndConnectTunnel(previous.Device, previous.ProxyPort, previous.NodeID)
+	if err != nil {
+		a.Store.LogEvent("error", "VPN", fmt.Sprintf("附加隧道 %s 没有可用备用节点，代理端口 %d 已停止，稍后自动重试恢复", previous.Device, previous.PublishedProxyPort))
+		a.scheduleTunnelRecovery(previous.Device, previous.ProxyPort)
+		return
+	}
+	ui, _, _ := a.Store.Snapshot()
+	if err := a.startTunnelProxy(ui, status); err != nil {
+		_ = a.VPN.DisconnectTunnel(status.Device)
+		a.Store.LogEvent("warning", "VPN", fmt.Sprintf("附加隧道 %s 恢复代理失败: %v", previous.Device, err))
+		a.scheduleTunnelRecovery(previous.Device, previous.ProxyPort)
+		return
+	}
+	a.Store.LogEvent("info", "VPN", fmt.Sprintf("附加隧道 %s 已自动切换到节点 %s，继续使用代理端口 %d（原因：%s）", previous.Device, status.NodeID, previous.PublishedProxyPort, reason))
+}
+
+// pickAndConnectTunnel 从候选节点中挑选可用节点，在指定设备上建立附加隧道。
+func (a *Application) pickAndConnectTunnel(device string, proxyPort int, skipID string) (vpn.TunnelStatus, error) {
 	for _, candidate := range a.Store.Candidates() {
-		if candidate.ID == previous.NodeID || candidate.ProbeStatus != "available" {
+		if candidate.ID == skipID || candidate.ProbeStatus != "available" {
 			continue
 		}
 		if !a.Operations.TryLockFor(8 * time.Second) {
-			return
+			return vpn.TunnelStatus{}, errors.New("节点维护任务正在运行")
 		}
-		status, err := a.VPN.ConnectTunnelOnDevice(context.Background(), candidate.ID, previous.ProxyPort, previous.Device)
+		status, err := a.VPN.ConnectTunnelOnDevice(context.Background(), candidate.ID, proxyPort, device)
 		a.Operations.unlockIfOwned()
 		if err != nil {
-			a.Store.LogEvent("warning", "VPN", fmt.Sprintf("附加隧道 %s 切换节点 %s 失败: %v", previous.Device, candidate.ID, err))
+			a.Store.LogEvent("warning", "VPN", fmt.Sprintf("附加隧道 %s 切换节点 %s 失败: %v", device, candidate.ID, err))
+			continue
+		}
+		return status, nil
+	}
+	return vpn.TunnelStatus{}, errors.New("没有可用备用节点")
+}
+
+func (a *Application) scheduleTunnelRecovery(device string, proxyPort int) {
+	a.tunnelRecoveryMu.Lock()
+	defer a.tunnelRecoveryMu.Unlock()
+	a.tunnelRecovery[device] = tunnelRecovery{proxyPort: proxyPort, nextTry: time.Now().Add(tunnelRecoveryInterval)}
+}
+
+func (a *Application) clearTunnelRecovery(device string) {
+	a.tunnelRecoveryMu.Lock()
+	defer a.tunnelRecoveryMu.Unlock()
+	delete(a.tunnelRecovery, device)
+}
+
+func (a *Application) nextTunnelRecovery() map[string]tunnelRecovery {
+	a.tunnelRecoveryMu.Lock()
+	defer a.tunnelRecoveryMu.Unlock()
+	snapshot := make(map[string]tunnelRecovery, len(a.tunnelRecovery))
+	for device, recovery := range a.tunnelRecovery {
+		snapshot[device] = recovery
+	}
+	return snapshot
+}
+
+func (a *Application) retryTunnelRecovery() {
+	for device, recovery := range a.nextTunnelRecovery() {
+		if time.Now().Before(recovery.nextTry) {
+			continue
+		}
+		if _, found := a.tunnelStatus(device); found {
+			a.clearTunnelRecovery(device)
+			continue
+		}
+		if a.tunnelProxyPortInUse(recovery.proxyPort) {
+			a.Store.LogEvent("info", "VPN", fmt.Sprintf("附加隧道 %s 的代理端口 %d 已被其他隧道使用，取消自动恢复", device, recovery.proxyPort))
+			a.clearTunnelRecovery(device)
+			continue
+		}
+		status, err := a.pickAndConnectTunnel(device, recovery.proxyPort, "")
+		if err != nil {
+			a.Store.LogEvent("warning", "VPN", fmt.Sprintf("附加隧道 %s 自动恢复失败: %v，将在 %s 后重试", device, err, tunnelRecoveryInterval))
+			a.scheduleTunnelRecovery(device, recovery.proxyPort)
 			continue
 		}
 		ui, _, _ := a.Store.Snapshot()
 		if err := a.startTunnelProxy(ui, status); err != nil {
 			_ = a.VPN.DisconnectTunnel(status.Device)
-			a.Store.LogEvent("warning", "VPN", fmt.Sprintf("附加隧道 %s 恢复代理失败: %v", previous.Device, err))
+			a.Store.LogEvent("warning", "VPN", fmt.Sprintf("附加隧道 %s 自动恢复代理失败: %v，将在 %s 后重试", device, err, tunnelRecoveryInterval))
+			a.scheduleTunnelRecovery(device, recovery.proxyPort)
 			continue
 		}
-		a.Store.LogEvent("info", "VPN", fmt.Sprintf("附加隧道 %s 已自动切换到节点 %s，继续使用代理端口 %d（原因：%s）", previous.Device, candidate.ID, previous.PublishedProxyPort, reason))
-		return
+		a.clearTunnelRecovery(device)
+		a.Store.LogEvent("info", "VPN", fmt.Sprintf("附加隧道 %s 已自动恢复节点 %s，代理端口 %d", device, status.NodeID, status.ProxyPort))
 	}
-	a.Store.LogEvent("error", "VPN", fmt.Sprintf("附加隧道 %s 没有可用备用节点，代理端口 %d 已停止", previous.Device, previous.PublishedProxyPort))
+}
+
+func (a *Application) tunnelProxyPortInUse(proxyPort int) bool {
+	ui, _, _ := a.Store.Snapshot()
+	if proxyPort == ui.Port || proxyPort == ui.ProxyPort {
+		return true
+	}
+	for _, tunnel := range a.VPN.Tunnels() {
+		if tunnel.ProxyPort == proxyPort {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *Application) tunnelStatus(device string) (vpn.TunnelStatus, bool) {
