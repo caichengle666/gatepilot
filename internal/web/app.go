@@ -296,6 +296,7 @@ func (a *Application) handleGET(writer http.ResponseWriter, request *http.Reques
 	case path == "/api/tunnels":
 		writeJSONResponse(writer, http.StatusOK, map[string]any{
 			"supported": runtime.GOOS == "linux", "max_tunnels": 8, "tunnels": a.VPN.Tunnels(),
+			"in_use": a.VPN.InUseNodeIDs(),
 		})
 	case path == "/api/split_routing":
 		a.getSplitRouting(writer, request)
@@ -668,6 +669,9 @@ func (a *Application) pickAndConnectTunnel(device string, proxyPort int, skipID 
 		if candidate.ID == skipID || candidate.ProbeStatus != "available" {
 			continue
 		}
+		if _, inUse := a.VPN.NodeInUse(candidate.ID, device); inUse {
+			continue
+		}
 		if !a.Operations.TryLockFor(8 * time.Second) {
 			return vpn.TunnelStatus{}, errors.New("节点维护任务正在运行")
 		}
@@ -877,6 +881,9 @@ func (a *Application) maintainLocked(ctx context.Context, force bool) (string, e
 					return "", err
 				}
 				if candidate.ProbeStatus != "available" {
+					continue
+				}
+				if _, inUse := a.VPN.NodeInUse(candidate.ID, "tun0"); inUse {
 					continue
 				}
 				attempts++

@@ -27,6 +27,7 @@ type Controller struct {
 	application   *store.Store
 	command       managedOpenVPNProcess
 	nodeID        string
+	pendingNodeID string
 	testIndex     int
 	versionOnce   sync.Once
 	version       float64
@@ -467,9 +468,22 @@ func (c *Controller) ConnectContext(ctx context.Context, nodeID string) (string,
 	if err := c.ValidateCandidate(candidate); err != nil {
 		return "", err
 	}
+	if owner, inUse := c.NodeInUse(candidate.ID, "tun0"); inUse {
+		return "", fmt.Errorf("节点 %s 已被%s使用，不能重复连接同一节点", candidate.ID, ownerLabel(owner))
+	}
 	c.application.EnableConnectionFor(candidate)
 	_ = c.application.SaveUI()
 	c.Stop("切换 VPN 节点")
+	c.mu.Lock()
+	c.pendingNodeID = candidate.ID
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		if c.pendingNodeID == candidate.ID {
+			c.pendingNodeID = ""
+		}
+		c.mu.Unlock()
+	}()
 	_ = c.application.SetState("connecting", "正在启动 OpenVPN", "")
 	_ = c.application.UpdateState(func(state *store.RuntimeState) {
 		state.LastCheckMessage = "正在连接节点 " + candidate.ID
@@ -707,6 +721,73 @@ func stopCommandAndWait(command managedOpenVPNProcess, done <-chan error) {
 	}
 }
 
+// nodeEndpointKey 返回节点的出口地址，用于识别同一台服务器的不同配置。
+func nodeEndpointKey(candidate store.Node) string {
+	return strings.ToLower(strings.TrimSpace(store.FirstNonEmpty(candidate.IP, candidate.RemoteHost)))
+}
+
+// NodeInUse 判断节点（按节点 ID 或出口 IP）是否已被主连接或其他附加隧道占用。
+// excludeDevice 为调用方自身占用的设备（tun0 表示主连接，tunN 表示附加隧道），不计入冲突。
+// 返回占用者名称，例如 "主连接" 或 "tun1"。
+func (c *Controller) NodeInUse(nodeID, excludeDevice string) (string, bool) {
+	candidate, found := c.application.NodeByID(nodeID)
+	key := ""
+	if found {
+		key = nodeEndpointKey(candidate)
+	}
+	c.mu.Lock()
+	mainIDs := []string{c.nodeID, c.pendingNodeID}
+	type occupant struct{ device, id, ip string }
+	occupants := make([]occupant, 0, len(c.tunnels))
+	for device, tunnel := range c.tunnels {
+		occupants = append(occupants, occupant{device: device, id: tunnel.NodeID, ip: tunnel.NodeIP})
+	}
+	c.mu.Unlock()
+	sort.Slice(occupants, func(left, right int) bool { return occupants[left].device < occupants[right].device })
+
+	matches := func(id, ip string) bool {
+		if id != "" && id == nodeID {
+			return true
+		}
+		if key == "" {
+			return false
+		}
+		if ip == "" && id != "" {
+			if other, ok := c.application.NodeByID(id); ok {
+				ip = nodeEndpointKey(other)
+			}
+		}
+		return ip != "" && strings.EqualFold(strings.TrimSpace(ip), key)
+	}
+	if excludeDevice != "tun0" {
+		for _, id := range mainIDs {
+			if id != "" && matches(id, "") {
+				return "主连接", true
+			}
+		}
+	}
+	for _, item := range occupants {
+		if item.device == excludeDevice {
+			continue
+		}
+		if matches(item.id, item.ip) {
+			return item.device, true
+		}
+	}
+	return "", false
+}
+
+// InUseNodeIDs 返回当前被主连接或附加隧道占用的节点 ID 及占用者，供界面展示。
+func (c *Controller) InUseNodeIDs() map[string]string {
+	result := map[string]string{}
+	for _, candidate := range c.application.Candidates() {
+		if owner, inUse := c.NodeInUse(candidate.ID, ""); inUse {
+			result[candidate.ID] = owner
+		}
+	}
+	return result
+}
+
 // Running 返回 VPN 是否正在运行。
 func (c *Controller) Running() bool {
 	c.mu.Lock()
@@ -735,7 +816,17 @@ func (c *Controller) connectTunnel(ctx context.Context, nodeID string, proxyPort
 	if err := c.ValidateCandidate(candidate); err != nil {
 		return TunnelStatus{}, err
 	}
+	if owner, inUse := c.NodeInUse(candidate.ID, requestedDevice); inUse {
+		return TunnelStatus{}, fmt.Errorf("节点 %s 已被%s使用，不能重复连接同一节点", candidate.ID, ownerLabel(owner))
+	}
+	endpointKey := nodeEndpointKey(candidate)
 	c.mu.Lock()
+	for device, tunnel := range c.tunnels {
+		if device != requestedDevice && (tunnel.NodeID == candidate.ID || (endpointKey != "" && strings.EqualFold(tunnel.NodeIP, endpointKey))) {
+			c.mu.Unlock()
+			return TunnelStatus{}, fmt.Errorf("节点 %s 已被%s使用，不能重复连接同一节点", candidate.ID, ownerLabel(device))
+		}
+	}
 	if len(c.tunnels) >= maxAdditionalTunnels {
 		c.mu.Unlock()
 		return TunnelStatus{}, fmt.Errorf("附加隧道最多同时运行 %d 条", maxAdditionalTunnels)
@@ -919,4 +1010,11 @@ func minDuration(left, right time.Duration) time.Duration {
 		return left
 	}
 	return right
+}
+
+func ownerLabel(owner string) string {
+	if owner == "主连接" {
+		return "主连接"
+	}
+	return "附加隧道 " + owner
 }

@@ -154,6 +154,9 @@ func (a *Application) autoSwitch(attempt int) {
 		if candidate.ID == state.ActiveNodeID || candidate.ProbeStatus != "available" {
 			continue
 		}
+		if _, inUse := a.VPN.NodeInUse(candidate.ID, "tun0"); inUse {
+			continue
+		}
 		if attempt >= 2 && strings.HasPrefix(strings.ToLower(candidate.Protocol), "udp") {
 			continue
 		}

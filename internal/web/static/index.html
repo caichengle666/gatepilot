@@ -1538,7 +1538,7 @@
   </div>
 </main>
 <script>
-let nodes=[], state={}, tunnels=[], tunnelSupported=false, testingNodeIds = new Set(), connectingTunnelNodeIds = new Set(), speedTesting = false;
+let nodes=[], state={}, tunnels=[], tunnelInUse={}, tunnelSupported=false, testingNodeIds = new Set(), connectingTunnelNodeIds = new Set(), speedTesting = false;
 let currentPage = 1;
 const pageSize = 99999;
 let currentPageNodes = [];
@@ -1975,8 +1975,11 @@ function render(){
         ? `<button class="${connectClass}" disabled style="background: var(--success-gradient); color: white; cursor: default; opacity: 1;">已连接 ${esc(protocol)}</button>`
         : `<button class="${connectClass}" ${(isTesting || connectionBusy) ? 'disabled style="opacity:0.3; cursor:not-allowed;"' : ''} onclick="connectNode('${esc(n.id)}', '${requestedProtocol}')">${connectLabel}</button>`;
       const tunnelBusy = connectingTunnelNodeIds.has(n.id);
+      const tunnelOwner = tunnelInUse[n.id] || (isCurrentlyActive ? "主连接" : "");
       const tunnelBtn = tunnelSupported
-        ? `<button class="test-btn" ${(tunnelBusy || tunnels.length >= 8) ? 'disabled' : ''} onclick="connectTunnel('${esc(n.id)}')">${tunnelBusy ? '创建中...' : '追加隧道'}</button>`
+        ? (tunnelOwner
+          ? `<button class="test-btn" disabled title="该节点已被${esc(tunnelOwner)}使用">使用中 · ${esc(tunnelOwner)}</button>`
+          : `<button class="test-btn" ${(tunnelBusy || tunnels.length >= 8) ? 'disabled' : ''} onclick="connectTunnel('${esc(n.id)}')">${tunnelBusy ? '创建中...' : '追加隧道'}</button>`)
         : '';
       
       const favoriteIds = Array.isArray(state.favorite_node_ids) ? state.favorite_node_ids : [];
@@ -2247,6 +2250,7 @@ async function loadTunnels() {
     const result = await response.json();
     tunnelSupported = !!result.supported;
     tunnels = Array.isArray(result.tunnels) ? result.tunnels : [];
+    tunnelInUse = (result.in_use && typeof result.in_use === "object") ? result.in_use : {};
     renderTunnels();
   } catch (e) {
     console.error("加载附加隧道失败", e);
@@ -2264,6 +2268,7 @@ async function load(){
   state=d.state||{};
 	  tunnelSupported=!!tunnelData.supported;
 	  tunnels=Array.isArray(tunnelData.tunnels) ? tunnelData.tunnels : [];
+	  tunnelInUse=(tunnelData.in_use && typeof tunnelData.in_use === "object") ? tunnelData.in_use : {};
   
   stableSortNodes();
   updateCountryFilter();
