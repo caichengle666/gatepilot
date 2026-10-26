@@ -1772,20 +1772,6 @@ function updateCountryFilter() {
   
   if (countries.includes(selectedValue)) {
     select.value = selectedValue;
-  } else if (state.status === "error" && state.message) {
-    activeCardContainer.innerHTML = `
-      <div class="active-card is-error">
-        <div class="active-card-info">
-          <div class="status-icon is-danger">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M5.07 19h13.86c1.54 0 2.5-1.67 1.73-3L13.73 4c-.77-1.33-2.69-1.33-3.46 0L3.34 16c-.77 1.33.19 3 1.73 3z" /></svg>
-          </div>
-          <div class="active-card-details">
-            <div class="active-card-title"><span class="badge unavailable">连接失败</span></div>
-            <div class="active-card-meta" style="color: var(--text-primary);">${esc(state.message)}</div>
-          </div>
-        </div>
-      </div>
-    `;
   } else {
     select.value = "";
   }
@@ -1879,6 +1865,9 @@ function renderTunnels() {
   </div>`;
 }
 
+let trafficRequestInFlight = false;
+let lastTrafficText = "";
+
 function render(){
   const activeNodeId = state.active_openvpn_node_id;
   const activeNode = nodes.find(n => n && (n.active || n.id === activeNodeId));
@@ -1951,10 +1940,24 @@ function render(){
               <div class="kv"><span class="kv-label">出口 IP</span><span class="kv-value mono">${esc(state.proxy_ip || "-")}</span></div>
             </div>
             <div class="active-card-footer">
-              <span id="dashboard_traffic" class="traffic">实时网速加载中...</span>
+              <span id="dashboard_traffic" class="traffic">${esc(lastTrafficText || "实时网速加载中...")}</span>
               <button type="button" id="dashboard_speed_test_btn" onclick="runDashboardSpeedTest()" class="btn-ghost" style="height: 28px; padding: 0 10px; font-size: 12px;" ${dashboardSpeedTest.running ? "disabled" : ""}>${dashboardSpeedTest.running ? "测速中..." : "宽带测速"}</button>
               <span id="dashboard_speed_test_result" style="font-size: 12px; color: ${dashboardSpeedTest.color};">${esc(dashboardSpeedTest.text)}</span>
             </div>
+          </div>
+        </div>
+      </div>
+    `;
+  } else if (state.status === "error" && state.message) {
+    activeCardContainer.innerHTML = `
+      <div class="active-card is-error">
+        <div class="active-card-info">
+          <div class="status-icon is-danger">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M5.07 19h13.86c1.54 0 2.5-1.67 1.73-3L13.73 4c-.77-1.33-2.69-1.33-3.46 0L3.34 16c-.77 1.33.19 3 1.73 3z" /></svg>
+          </div>
+          <div class="active-card-details">
+            <div class="active-card-title"><span class="badge unavailable">连接失败</span></div>
+            <div class="active-card-meta" style="color: var(--text-primary);">${esc(state.message)}</div>
           </div>
         </div>
       </div>
@@ -3234,8 +3237,6 @@ function formatRate(value) {
   return bits.toFixed(0) + " bps";
 }
 
-let trafficRequestInFlight = false;
-let lastTrafficText = "";
 
 async function updateTrafficStats() {
   const trafficElement = $("dashboard_traffic");
