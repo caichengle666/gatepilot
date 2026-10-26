@@ -647,6 +647,9 @@ func (a *Application) failoverTunnel(previous vpn.TunnelStatus, reason string) {
 			return
 		}
 	}
+	if failed, found := a.Store.NodeByID(previous.NodeID); found {
+		a.Store.MarkBlacklisted(failed, "附加隧道故障切换: "+reason)
+	}
 	status, err := a.pickAndConnectTunnel(previous.Device, previous.ProxyPort, previous.NodeID)
 	if err != nil {
 		a.Store.LogEvent("error", "VPN", fmt.Sprintf("附加隧道 %s 没有可用备用节点，代理端口 %d 已停止，稍后自动重试恢复", previous.Device, previous.PublishedProxyPort))
@@ -664,26 +667,93 @@ func (a *Application) failoverTunnel(previous vpn.TunnelStatus, reason string) {
 }
 
 // pickAndConnectTunnel 从候选节点中挑选可用节点，在指定设备上建立附加隧道。
+// skipID 为刚失败的节点，与它同一出口 IP 的其他配置也会被跳过。
+// 没有空闲的可用节点时，会先检测一批未检测节点再重试一次。
 func (a *Application) pickAndConnectTunnel(device string, proxyPort int, skipID string) (vpn.TunnelStatus, error) {
-	for _, candidate := range a.Store.Candidates() {
-		if candidate.ID == skipID || candidate.ProbeStatus != "available" {
-			continue
+	skipIP := ""
+	if skipID != "" {
+		if skipped, found := a.Store.NodeByID(skipID); found {
+			skipIP = tunnelNodeIP(skipped)
 		}
-		if _, inUse := a.VPN.NodeInUse(candidate.ID, device); inUse {
+	}
+	for round := 0; round < 2; round++ {
+		if round > 0 {
+			tested, err := a.testSpareTunnelNodes(device, skipID, skipIP)
+			if err != nil {
+				return vpn.TunnelStatus{}, err
+			}
+			if tested == 0 {
+				break
+			}
+		}
+		status, tried, err := a.connectFirstSpareTunnelNode(device, proxyPort, skipID, skipIP)
+		if err == nil || tried < 0 {
+			return status, err
+		}
+	}
+	return vpn.TunnelStatus{}, errors.New("没有可用备用节点")
+}
+
+func tunnelNodeIP(candidate store.Node) string {
+	return strings.ToLower(strings.TrimSpace(store.FirstNonEmpty(candidate.IP, candidate.RemoteHost)))
+}
+
+func (a *Application) skipTunnelCandidate(candidate store.Node, device, skipID, skipIP string) bool {
+	if candidate.ID == skipID || (skipIP != "" && tunnelNodeIP(candidate) == skipIP) {
+		return true
+	}
+	_, inUse := a.VPN.NodeInUse(candidate.ID, device)
+	return inUse
+}
+
+// connectFirstSpareTunnelNode 依次尝试空闲的可用节点。tried 为 -1 表示遇到需要立即返回的错误。
+func (a *Application) connectFirstSpareTunnelNode(device string, proxyPort int, skipID, skipIP string) (vpn.TunnelStatus, int, error) {
+	tried := 0
+	for _, candidate := range a.Store.Candidates() {
+		if candidate.ProbeStatus != "available" || a.skipTunnelCandidate(candidate, device, skipID, skipIP) {
 			continue
 		}
 		if !a.Operations.TryLockFor(8 * time.Second) {
-			return vpn.TunnelStatus{}, errors.New("节点维护任务正在运行")
+			return vpn.TunnelStatus{}, -1, errors.New("节点维护任务正在运行")
 		}
+		tried++
 		status, err := a.VPN.ConnectTunnelOnDevice(context.Background(), candidate.ID, proxyPort, device)
 		a.Operations.unlockIfOwned()
 		if err != nil {
 			a.Store.LogEvent("warning", "VPN", fmt.Sprintf("附加隧道 %s 切换节点 %s 失败: %v", device, candidate.ID, err))
 			continue
 		}
-		return status, nil
+		return status, tried, nil
 	}
-	return vpn.TunnelStatus{}, errors.New("没有可用备用节点")
+	return vpn.TunnelStatus{}, tried, errors.New("没有可用备用节点")
+}
+
+// testSpareTunnelNodes 在没有空闲可用节点时检测一批尚未确认可用的空闲节点。
+func (a *Application) testSpareTunnelNodes(device, skipID, skipIP string) (int, error) {
+	limit := a.Store.Config.InitialTestLimit
+	if limit <= 0 || limit > 6 {
+		limit = 6
+	}
+	ids := make([]string, 0, limit)
+	for _, candidate := range a.Store.Candidates() {
+		if len(ids) >= limit {
+			break
+		}
+		if candidate.ProbeStatus == "available" || candidate.ProbeStatus == "testing" || a.skipTunnelCandidate(candidate, device, skipID, skipIP) {
+			continue
+		}
+		ids = append(ids, candidate.ID)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	if !a.Operations.TryLockFor(8 * time.Second) {
+		return 0, errors.New("节点维护任务正在运行")
+	}
+	a.Store.LogEvent("info", "VPN", fmt.Sprintf("附加隧道 %s 没有空闲可用节点，正在检测 %d 个备用节点", device, len(ids)))
+	tested := a.VPN.TestNodes(ids)
+	a.Operations.unlockIfOwned()
+	return len(tested), nil
 }
 
 func (a *Application) scheduleTunnelRecovery(device string, proxyPort int) {
@@ -833,9 +903,10 @@ func (a *Application) maintainLocked(ctx context.Context, force bool) (string, e
 		}
 
 		candidates := a.Store.Candidates()
+		inUse := a.VPN.InUseNodeIDs()
 		valid := 0
 		for _, candidate := range candidates {
-			if candidate.ProbeStatus == "available" {
+			if candidate.ProbeStatus == "available" && inUse[candidate.ID] == "" {
 				valid++
 			}
 		}
@@ -844,7 +915,7 @@ func (a *Application) maintainLocked(ctx context.Context, force bool) (string, e
 			if valid+len(ids) >= a.Store.Config.TargetValidNodes || len(ids) >= a.Store.Config.InitialTestLimit {
 				break
 			}
-			if candidate.ProbeStatus != "available" {
+			if candidate.ProbeStatus != "available" && inUse[candidate.ID] == "" {
 				ids = append(ids, candidate.ID)
 			}
 		}

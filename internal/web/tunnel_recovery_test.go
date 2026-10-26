@@ -68,3 +68,27 @@ func TestTunnelRecoveryIsRescheduledAfterFailedAttempt(t *testing.T) {
 		t.Fatalf("rescheduled retry is still due: %+v", entry)
 	}
 }
+
+func TestTunnelFailoverSkipsOtherConfigsOfFailedServer(t *testing.T) {
+	config := store.LoadAppConfig()
+	config.DataDir = t.TempDir()
+	config.DisableBackground = true
+	application, err := store.New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	application.Nodes = []store.Node{
+		{ID: "JP_udp", IP: "219.104.129.60", RemotePort: 44594, ProbeStatus: "available"},
+		{ID: "JP_tcp", IP: "219.104.129.60", RemotePort: 443, ProbeStatus: "available"},
+		{ID: "US_free", IP: "203.0.113.9", ProbeStatus: "available"},
+	}
+	app := NewApplication(application, vpn.NewController(application))
+	failed, _ := application.NodeByID("JP_udp")
+	skipIP := tunnelNodeIP(failed)
+	for id, want := range map[string]bool{"JP_udp": true, "JP_tcp": true, "US_free": false} {
+		candidate, _ := application.NodeByID(id)
+		if got := app.skipTunnelCandidate(candidate, "tun3", "JP_udp", skipIP); got != want {
+			t.Fatalf("skipTunnelCandidate(%s) = %v, want %v", id, got, want)
+		}
+	}
+}
