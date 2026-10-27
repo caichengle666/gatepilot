@@ -38,6 +38,7 @@ func BackgroundMaintenance(application *Application) {
 	go application.proxyChecker()
 	go application.activeNodePinger()
 	go application.tunnelHealthChecker()
+	go application.nodeSweeper()
 	application.collectorLoop()
 }
 
@@ -432,4 +433,97 @@ func (a *Application) updateProxyState(result map[string]any) {
 		state.ProxyLatencyMS = latency
 		state.ProxyError = errorMessage
 	})
+}
+
+const (
+	nodeSweepInterval = time.Minute
+	nodeSweepBatch    = 2
+	nodeSweepStaleAge = 30 * time.Minute
+)
+
+// spareNodeTarget 返回需要保持的空闲可用节点数：隧道数（主连接 + 附加隧道，含等待恢复的）× 2，
+// 不低于 TARGET_VALID_NODES。
+func (a *Application) spareNodeTarget() int {
+	tunnels := len(a.VPN.Tunnels()) + len(a.nextTunnelRecovery())
+	ui, _, _ := a.Store.Snapshot()
+	if ui.ConnectionEnabled || a.VPN.Running() {
+		tunnels++
+	}
+	target := tunnels * 2
+	if target < a.Store.Config.TargetValidNodes {
+		target = a.Store.Config.TargetValidNodes
+	}
+	return target
+}
+
+// nodeSweeper 在后台静默检测节点：空闲可用节点不足目标时检测待检测节点，
+// 足够时只复测超过 30 分钟未检测的空闲可用节点。手动操作会取消正在进行的检测。
+func (a *Application) nodeSweeper() {
+	time.Sleep(time.Minute)
+	for {
+		a.sweepNodesOnce(context.Background())
+		time.Sleep(nodeSweepInterval)
+	}
+}
+
+// pickSweepNodes 选出本轮要检测的节点。
+func (a *Application) pickSweepNodes(now time.Time) []string {
+	candidates := a.Store.Candidates()
+	inUse := a.VPN.InUseNodeIDs()
+	spare := 0
+	for _, candidate := range candidates {
+		if candidate.ProbeStatus == "available" && inUse[candidate.ID] == "" {
+			spare++
+		}
+	}
+	ids := make([]string, 0, nodeSweepBatch)
+	if spare < a.spareNodeTarget() {
+		for _, candidate := range candidates {
+			if len(ids) >= nodeSweepBatch {
+				return ids
+			}
+			if inUse[candidate.ID] != "" || candidate.ProbeStatus == "available" || candidate.ProbeStatus == "testing" {
+				continue
+			}
+			// 不可用节点在退避期内不重测；被取消的检测不算失败。
+			if candidate.ProbeStatus == "unavailable" && candidate.ProbeMessage != "后台检测已取消" && now.Sub(time.Unix(candidate.ProbedAt, 0)) < a.Store.Config.InvalidBackoff {
+				continue
+			}
+			ids = append(ids, candidate.ID)
+		}
+	}
+	for _, candidate := range candidates {
+		if len(ids) >= nodeSweepBatch {
+			break
+		}
+		if inUse[candidate.ID] != "" || candidate.ProbeStatus != "available" || now.Sub(time.Unix(candidate.ProbedAt, 0)) < nodeSweepStaleAge {
+			continue
+		}
+		ids = append(ids, candidate.ID)
+	}
+	return ids
+}
+
+func (a *Application) sweepNodesOnce(ctx context.Context) {
+	ui, _, _ := a.Store.Snapshot()
+	if ui.ConnectionEnabled && !a.VPN.Running() {
+		return // 主连接正在等待自动连接，交给 collector 处理
+	}
+	ids := a.pickSweepNodes(time.Now())
+	if len(ids) == 0 || !a.Operations.TryLock() {
+		return
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	a.setMaintenanceCancel(cancel)
+	defer a.Operations.unlockIfOwned()
+	defer cancel()
+	defer a.clearMaintenanceCancel()
+	a.VPN.TestNodesContext(ctx, ids)
+	valid := 0
+	for _, candidate := range a.Store.Candidates() {
+		if candidate.ProbeStatus == "available" {
+			valid++
+		}
+	}
+	_ = a.Store.UpdateState(func(state *store.RuntimeState) { state.ValidNodes = valid })
 }

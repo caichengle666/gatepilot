@@ -548,6 +548,7 @@ func (a *Application) connectTunnel(writer http.ResponseWriter, request *http.Re
 		writeJSONResponse(writer, http.StatusBadRequest, map[string]any{"ok": false, "error": "附加代理端口无效或与现有服务冲突"})
 		return
 	}
+	a.cancelMaintenance()
 	if !a.Operations.TryLockFor(8 * time.Second) {
 		writeJSONResponse(writer, http.StatusConflict, map[string]any{"ok": false, "error": "当前已有连接或节点维护任务正在运行"})
 		return
@@ -713,6 +714,7 @@ func (a *Application) connectFirstSpareTunnelNode(device string, proxyPort int, 
 		if candidate.ProbeStatus != "available" || a.skipTunnelCandidate(candidate, device, skipID, skipIP) {
 			continue
 		}
+		a.cancelMaintenance()
 		if !a.Operations.TryLockFor(8 * time.Second) {
 			return vpn.TunnelStatus{}, -1, errors.New("节点维护任务正在运行")
 		}
@@ -747,6 +749,7 @@ func (a *Application) testSpareTunnelNodes(device, skipID, skipIP string) (int, 
 	if len(ids) == 0 {
 		return 0, nil
 	}
+	a.cancelMaintenance()
 	if !a.Operations.TryLockFor(8 * time.Second) {
 		return 0, errors.New("节点维护任务正在运行")
 	}
@@ -912,7 +915,7 @@ func (a *Application) maintainLocked(ctx context.Context, force bool) (string, e
 		}
 		ids := make([]string, 0, a.Store.Config.InitialTestLimit)
 		for _, candidate := range candidates {
-			if valid+len(ids) >= a.Store.Config.TargetValidNodes || len(ids) >= a.Store.Config.InitialTestLimit {
+			if valid+len(ids) >= a.spareNodeTarget() || len(ids) >= a.Store.Config.InitialTestLimit {
 				break
 			}
 			if candidate.ProbeStatus != "available" && inUse[candidate.ID] == "" {
