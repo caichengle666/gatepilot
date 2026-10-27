@@ -241,3 +241,20 @@ func TestCandidatesKeepAvailableTCPBeforeUnavailableUDP(t *testing.T) {
 		t.Fatalf("unexpected candidates: %+v", candidates)
 	}
 }
+
+func TestCancelledProbeReturnsNodeToNotChecked(t *testing.T) {
+	config := LoadAppConfig()
+	config.DataDir = t.TempDir()
+	config.DisableBackground = true
+	application, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	application.Nodes = []Node{{ID: "n1", ProbeStatus: "not_checked"}}
+	application.UpdateNodeProbe("n1", false, 0, "正在检测节点连通性...")
+	application.UpdateNodeProbe("n1", false, 0, ProbeCancelledMessage)
+	node, _ := application.NodeByID("n1")
+	if node.ProbeStatus != "not_checked" {
+		t.Fatalf("status after cancel = %q, want not_checked", node.ProbeStatus)
+	}
+}

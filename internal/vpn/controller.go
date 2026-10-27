@@ -580,7 +580,7 @@ func (c *Controller) TestNodeContext(ctx context.Context, nodeID string) (store.
 	started := time.Now()
 	run, err := c.runUntilReady(ctx, candidate, device, minDuration(c.application.Config.OpenVPNTimeout, 12*time.Second), true)
 	if errors.Is(err, context.Canceled) {
-		c.application.UpdateNodeProbe(candidate.ID, false, 0, "后台检测已取消")
+		c.application.UpdateNodeProbe(candidate.ID, false, 0, store.ProbeCancelledMessage)
 		updated, _ := c.application.NodeByID(candidate.ID)
 		return updated, err
 	}

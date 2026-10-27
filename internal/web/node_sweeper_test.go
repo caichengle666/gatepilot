@@ -41,7 +41,7 @@ func TestPickSweepNodesPrefersPendingWhenShort(t *testing.T) {
 	app := newSweepTestApp(t, []store.Node{
 		{ID: "fresh", IP: "198.51.100.1", ProbeStatus: "available", ProbedAt: now.Unix()},
 		{ID: "failed", IP: "198.51.100.2", ProbeStatus: "unavailable", ProbedAt: now.Unix()},
-		{ID: "cancelled", IP: "198.51.100.3", ProbeStatus: "unavailable", ProbeMessage: "后台检测已取消", ProbedAt: now.Unix()},
+		{ID: "cancelled", IP: "198.51.100.3", ProbeStatus: "not_checked", ProbeMessage: store.ProbeCancelledMessage, ProbedAt: now.Unix()},
 		{ID: "pending", IP: "198.51.100.4"},
 		{ID: "stale", IP: "198.51.100.5", ProbeStatus: "available", ProbedAt: now.Add(-time.Hour).Unix()},
 	})

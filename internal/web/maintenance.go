@@ -485,8 +485,8 @@ func (a *Application) pickSweepNodes(now time.Time) []string {
 			if inUse[candidate.ID] != "" || candidate.ProbeStatus == "available" || candidate.ProbeStatus == "testing" {
 				continue
 			}
-			// 不可用节点在退避期内不重测；被取消的检测不算失败。
-			if candidate.ProbeStatus == "unavailable" && candidate.ProbeMessage != "后台检测已取消" && now.Sub(time.Unix(candidate.ProbedAt, 0)) < a.Store.Config.InvalidBackoff {
+			// 不可用节点在退避期内不重测。
+			if candidate.ProbeStatus == "unavailable" && now.Sub(time.Unix(candidate.ProbedAt, 0)) < a.Store.Config.InvalidBackoff {
 				continue
 			}
 			ids = append(ids, candidate.ID)

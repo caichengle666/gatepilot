@@ -375,11 +375,20 @@ func (s *Store) EnableConnectionFor(candidate Node) {
 	s.mu.Unlock()
 }
 
+// ProbeCancelledMessage 是检测被手动操作打断时写入的提示。
+const ProbeCancelledMessage = "后台检测已取消"
+
 // UpdateNodeProbe 更新节点探测结果并重新排序。
 func (s *Store) UpdateNodeProbe(id string, available bool, latency int64, message string) {
 	s.mu.Lock()
 	for index := range s.Nodes {
 		if s.Nodes[index].ID != id {
+			continue
+		}
+		if message == ProbeCancelledMessage {
+			// 检测被打断不算失败，回到待检测，保留上次检测时间。
+			s.Nodes[index].ProbeStatus = "not_checked"
+			s.Nodes[index].ProbeMessage = message
 			continue
 		}
 		if message == "正在检测节点连通性..." {
